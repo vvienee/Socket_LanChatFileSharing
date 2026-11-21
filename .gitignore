@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / Editor settings (giữ lại .vscode/launch.json cho nhóm)
+.vscode/*
+!.vscode/launch.json
+.idea/
+
+# Thư mục lưu file tải về khi test (giữ lại .gitkeep)
+downloads/*
+!downloads/.gitkeep
+
+# OS generated files
+.DS_Store
+Thumbs.db
