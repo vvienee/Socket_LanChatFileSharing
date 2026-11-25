@@ -1,119 +1,114 @@
-"""
-[THÀNH VIÊN A] - Quản lý dữ liệu dùng chung (SharedState) giữa 6 luồng.
-Tất cả thao tác đọc/ghi trên danh sách peers, lịch sử chat, unread count
-PHẢI được bảo vệ bằng self._lock (threading.RLock).
-"""
+"""Kho dữ liệu dùng chung giữa các luồng (Thành viên A).
 
+Mọi phương thức public đều lấy threading.RLock và trả về BẢN SAO của PeerInfo,
+nên caller (thread khác) có thể đọc thoải mái mà không cần giữ lock.
+"""
+import dataclasses
 import threading
+import time
 from typing import Dict, List, Optional, Tuple
-from core.models import PeerInfo, ChatMessage
+
+from .models import ChatMessage, PeerInfo, ONLINE, VALID_STATUSES
 
 
 class SharedState:
-    """
-    Lớp lưu trữ trạng thái toàn cục của ứng dụng.
-    An toàn đa luồng (Thread-safe) nhờ sử dụng threading.RLock.
-    """
-
-    def __init__(self, my_name: str, my_tcp_port: int, initial_status: str = "online") -> None:
+    def __init__(self, my_name: str, my_tcp_port: int):
+        if not my_name or "|" in my_name:
+            raise ValueError("name must be non-empty and must not contain '|'")
         self._lock = threading.RLock()
-        self.my_name: str = my_name
-        self.my_tcp_port: int = my_tcp_port
-        self.my_status: str = initial_status  # "online" | "away"
+        self._my_name = my_name
+        self._my_port = my_tcp_port
+        self._my_status = ONLINE
+        self._peers: Dict[str, PeerInfo] = {}              # peer_id -> PeerInfo
+        self._histories: Dict[str, List[ChatMessage]] = {}  # peer_id -> messages
+        self._unread: Dict[str, int] = {}                   # peer_id -> unread
+        self._active_id: Optional[str] = None
 
-        # Danh sách các peer đang online: key là peer_id ("<ip>:<tcp_port>")
-        self.peers: Dict[str, PeerInfo] = {}
-
-        # Lịch sử tin nhắn theo từng peer_id
-        self.chat_histories: Dict[str, List[ChatMessage]] = {}
-
-        # Bộ đếm số tin nhắn chưa đọc theo từng peer_id
-        self.unread_counts: Dict[str, int] = {}
-
-        # peer_id của người đang được chọn để chat hiện tại (None nếu chưa chọn ai)
-        self.active_chat_peer_id: Optional[str] = None
-
+    # ------------------------------------------------------- bản thân
     def set_my_status(self, status: str) -> None:
-        """
-        Cập nhật trạng thái của bản thân ('online' hoặc 'away').
-        TODO [Thành viên A]: Dùng self._lock để kiểm tra hợp lệ và cập nhật self.my_status.
-        """
-        pass
+        if status not in VALID_STATUSES:
+            raise ValueError("status must be 'online' or 'away'")
+        with self._lock:
+            self._my_status = status
 
     def get_my_info(self) -> Tuple[str, int, str]:
-        """
-        Trả về bộ 3 (my_name, my_tcp_port, my_status).
-        TODO [Thành viên A]: Bảo vệ bằng self._lock và trả về tuple thông tin cá nhân.
-        """
-        return (self.my_name, self.my_tcp_port, self.my_status)
+        with self._lock:
+            return self._my_name, self._my_port, self._my_status
 
+    # ------------------------------------------------------- danh sách peer
     def upsert_peer(self, name: str, ip: str, tcp_port: int, status: str) -> Optional[str]:
-        """
-        Thêm mới hoặc cập nhật thông tin một peer khi nhận được bản tin UDP HELLO.
-        - Bỏ qua nếu là gói tin của chính mình (trùng tcp_port và IP local).
-        - Cập nhật last_seen = time.time().
-        - Trả về:
-            + "joined": Nếu peer mới xuất hiện lần đầu.
-            + "status_changed": Nếu peer đã có mặt nhưng đổi status (online <-> away) hoặc đổi tên.
-            + None: Nếu chỉ cập nhật last_seen bình thường.
-        TODO [Thành viên A]: Hiện thực logic trên bên trong self._lock.
-        """
-        pass
+        """Thêm/cập nhật peer. Trả về "joined" (mới), "status_changed", hoặc None (chỉ làm mới last_seen)."""
+        with self._lock:
+            peer_id = f"{ip}:{tcp_port}"
+            old = self._peers.get(peer_id)
+            # Cùng tên nhưng khác ip:port (peer khởi động lại với cổng khác) -> bỏ bản cũ.
+            for pid in [p.peer_id for p in self._peers.values()
+                        if p.name == name and p.peer_id != peer_id]:
+                del self._peers[pid]
+            self._peers[peer_id] = PeerInfo(name, ip, tcp_port, status, time.time())
+            if old is None:
+                return "joined"
+            return "status_changed" if old.status != status else None
 
     def remove_expired_peers(self, timeout_sec: float = 10.0) -> List[PeerInfo]:
-        """
-        Quét và xóa các peer không gửi gói tin UDP nào trong khoảng thời gian timeout_sec (mặc định 10s).
-        Trả về danh sách các PeerInfo vừa bị xóa để thông báo lên UI.
-        TODO [Thành viên A]: Hiện thực logic lọc và xóa peer quá hạn bên trong self._lock.
-        """
-        return []
+        now = time.time()
+        with self._lock:
+            gone = [p for p in self._peers.values() if now - p.last_seen > timeout_sec]
+            for p in gone:
+                del self._peers[p.peer_id]
+            return [dataclasses.replace(p) for p in gone]
 
     def get_online_peers(self) -> List[PeerInfo]:
-        """
-        Trả về bản sao (copy) danh sách các PeerInfo đang online để hiển thị cho lệnh /list hoặc Sidebar.
-        TODO [Thành viên A]: Dùng self._lock và trả về list(self.peers.values()).
-        """
-        return []
+        """Sắp xếp theo tên -> số thứ tự ổn định cho /list và /chat <số>."""
+        with self._lock:
+            return [dataclasses.replace(p) for p in
+                    sorted(self._peers.values(), key=lambda p: (p.name.lower(), p.peer_id))]
+
+    def get_peer(self, peer_id: str) -> Optional[PeerInfo]:
+        with self._lock:
+            p = self._peers.get(peer_id)
+            return dataclasses.replace(p) if p else None
 
     def find_peer(self, target: str) -> Optional[PeerInfo]:
-        """
-        Tìm kiếm peer dựa vào:
-        1. Số thứ tự (1-based index theo danh sách get_online_peers(), ví dụ "1", "2").
-        2. Tên người dùng (không phân biệt hoa thường, ví dụ "Minh").
-        3. Định danh peer_id ("192.168.1.12:5000").
-        TODO [Thành viên A]: Hiện thực logic tìm kiếm phục vụ lệnh /chat <name|number>.
-        """
+        """target: số thứ tự (từ 1, như /list), tên (không phân biệt hoa/thường) hoặc peer_id."""
+        target = target.strip()
+        peers = self.get_online_peers()
+        if target.isdigit():
+            i = int(target)
+            return peers[i - 1] if 1 <= i <= len(peers) else None
+        for p in peers:
+            if p.name.lower() == target.lower() or p.peer_id == target:
+                return p
         return None
 
+    # ------------------------------------- chat đang mở / lịch sử / unread
     def set_active_chat(self, peer_id: Optional[str]) -> List[ChatMessage]:
-        """
-        Đặt peer đang chat hiện tại (hoặc None khi /leave).
-        Nếu peer_id khác None, tự động reset unread_counts[peer_id] = 0
-        và trả về toàn bộ lịch sử ChatMessage của peer đó.
-        TODO [Thành viên A]: Hiện thực logic chuyển cuộc trò chuyện bên trong self._lock.
-        """
-        return []
+        """Đặt đối tác chat hiện tại, reset unread của họ, trả về toàn bộ lịch sử tin nhắn."""
+        with self._lock:
+            self._active_id = peer_id
+            if peer_id is None:
+                return []
+            self._unread[peer_id] = 0
+            return list(self._histories.get(peer_id, []))
 
     def get_active_chat(self) -> Optional[PeerInfo]:
-        """
-        Trả về đối tượng PeerInfo của người đang chat hiện tại (hoặc None nếu không trong phòng chat nào).
-        TODO [Thành viên A]: Hiện thực bên trong self._lock.
-        """
-        return None
+        """Peer đang chat; None nếu chưa chọn hoặc peer đã offline."""
+        with self._lock:
+            return self.get_peer(self._active_id) if self._active_id else None
+
+    def get_active_chat_id(self) -> Optional[str]:
+        with self._lock:
+            return self._active_id
 
     def append_message(self, peer_id: str, msg: ChatMessage) -> int:
-        """
-        Thêm một tin nhắn mới vào lịch sử chat với peer_id.
-        - Nếu peer_id != self.active_chat_peer_id (và không phải tin nhắn do chính mình gửi):
-          Tăng self.unread_counts[peer_id] lên 1.
-        - Trả về giá trị unread_counts[peer_id] sau khi cập nhật.
-        TODO [Thành viên A]: Hiện thực logic lưu lịch sử và tăng bộ đếm unread.
-        """
-        return 0
+        """Lưu tin nhắn. Nếu peer_id KHÔNG phải chat hiện tại thì tăng unread.
+        Trả về số unread hiện tại của peer_id (0 nếu đang chat với họ)."""
+        with self._lock:
+            self._histories.setdefault(peer_id, []).append(msg)
+            if peer_id != self._active_id and not msg.is_system and msg.sender_id == peer_id:
+                self._unread[peer_id] = self._unread.get(peer_id, 0) + 1
+            return self._unread.get(peer_id, 0)
 
     def get_unread_count(self, peer_id: str) -> int:
-        """
-        Lấy số lượng tin nhắn chưa đọc của một peer_id.
-        TODO [Thành viên A]: Hiện thực bên trong self._lock.
-        """
-        return 0
+        with self._lock:
+            return self._unread.get(peer_id, 0)

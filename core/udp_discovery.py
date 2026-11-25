@@ -1,96 +1,138 @@
-"""
-[THÀNH VIÊN A] - Dịch vụ khám phá người dùng trong mạng LAN bằng UDP Broadcast.
-Quản lý 2 luồng theo đặc tả kỹ thuật:
-- Thread 2 (UDP Broadcaster): Phát bản tin HELLO|<name>|<tcp_port>|<status> mỗi 3 giây.
-- Thread 3 (UDP Listener): Lắng nghe cổng UDP 9999, cập nhật danh sách peer và quét timeout 10 giây.
-"""
+"""Khám phá người dùng bằng UDP Broadcast (Thành viên A).
 
+  Thread 2 (broadcaster): gửi  HELLO|<name>|<tcp_port>|<status>  mỗi 3 giây
+                          (hoặc ngay lập tức khi gọi send_immediate_broadcast()).
+  Thread 3 (listener)   : nhận gói trên cổng UDP, upsert vào SharedState, mỗi 1 giây
+                          quét xóa peer im lặng > 10 giây.
+
+`signals` (tùy chọn) là đối tượng duck-typed có
+    signals.peer_list_updated.emit()
+    signals.system_notification.emit(str)
+nên truyền thẳng AppSignals của C vào; core không import Qt.
+Định dạng gói HELLO tự phân tích tại đây (giống network/protocol.py) để A chạy độc lập với B.
+"""
 import socket
 import threading
-from typing import Optional
-from core.shared_state import SharedState
+import time
+
+from .models import VALID_STATUSES
+from .shared_state import SharedState
 
 
 class UDPDiscoveryService:
-    """
-    Quản lý việc phát và nhận tín hiệu hiện diện (Presence) qua giao thức UDP.
-    """
-
-    DEFAULT_UDP_PORT = 9999
-    BROADCAST_INTERVAL_SEC = 3.0
-    PEER_TIMEOUT_SEC = 10.0
-
-    def __init__(
-        self,
-        shared_state: SharedState,
-        signals: object,
-        udp_port: int = DEFAULT_UDP_PORT,
-        broadcast_ip: str = "255.255.255.255",
-    ) -> None:
-        """
-        Khởi tạo dịch vụ UDP Discovery.
-        :param shared_state: Đối tượng SharedState dùng chung.
-        :param signals: Đối tượng AppSignals (ui/qt_signals.py) để bắn sự kiện lên GUI.
-        :param udp_port: Cổng UDP cố định (mặc định 9999).
-        :param broadcast_ip: Địa chỉ broadcast ('255.255.255.255' cho LAN hoặc '127.255.255.255' khi test 1 máy).
-        """
-        self.shared_state = shared_state
-        self.signals = signals
+    def __init__(self, state: SharedState, udp_port: int = 9999,
+                 broadcast_addr: str = "255.255.255.255", signals=None,
+                 interval: float = 3.0, timeout: float = 10.0, scan_interval: float = 1.0):
+        self.state = state
         self.udp_port = udp_port
-        self.broadcast_ip = broadcast_ip
+        self.broadcast_addr = broadcast_addr
+        self.signals = signals
+        self.interval = interval
+        self.timeout = timeout
+        self.scan_interval = scan_interval
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._threads = []
+        self._rx = None
 
-        self._running = False
-        self._broadcaster_thread: Optional[threading.Thread] = None
-        self._listener_thread: Optional[threading.Thread] = None
-        self._send_sock: Optional[socket.socket] = None
-        self._recv_sock: Optional[socket.socket] = None
-
+    # ---------------------------------------------------------- điều khiển
     def start(self) -> None:
-        """
-        Khởi tạo UDP sockets và bắt đầu chạy 2 luồng daemon:
-        - _broadcaster_loop (Thread 2)
-        - _listener_loop (Thread 3)
-        TODO [Thành viên A]:
-        1. Cấu hình _recv_sock với SO_REUSEADDR và SO_BROADCAST, bind(("", self.udp_port)).
-        2. Đặt settimeout(1.0) cho _recv_sock để vòng lặp có thể kiểm tra self._running và quét timeout 10s định kỳ.
-        3. Khởi chạy 2 luồng với daemon=True.
-        """
-        pass
+        """Bind socket ngay trong lời gọi (cổng bận -> OSError báo sớm), rồi chạy 2 thread."""
+        rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):          # không có trên Windows
+            rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        rx.bind(("", self.udp_port))
+        rx.settimeout(min(self.scan_interval, 0.5))
+        self._rx = rx
+        self._stop.clear()
+        for target, name in ((self._broadcast_loop, "udp-broadcaster"),
+                             (self._listen_loop, "udp-listener")):
+            t = threading.Thread(target=target, name=name, daemon=True)
+            t.start()
+            self._threads.append(t)
 
     def stop(self) -> None:
-        """
-        Dừng 2 luồng UDP và đóng các socket an toàn khi thoát chương trình (/quit).
-        TODO [Thành viên A]: Đặt self._running = False và đóng _send_sock, _recv_sock.
-        """
-        pass
+        self._stop.set()
+        self._wake.set()
+        for t in self._threads:
+            t.join(timeout=2)
+        self._threads.clear()
+        if self._rx:
+            self._rx.close()
+            self._rx = None
 
     def send_immediate_broadcast(self) -> None:
-        """
-        Gửi ngay lập tức 1 gói tin UDP HELLO (dùng khi người dùng vừa đổi /status <online|away>
-        để các peer khác thấy ngay mà không cần đợi hết chu kỳ 3 giây).
-        TODO [Thành viên A]: Đóng gói 'HELLO|<name>|<tcp_port>|<status>' và sendto((self.broadcast_ip, self.udp_port)).
-        """
-        pass
+        """Gọi sau state.set_my_status() để phát HELLO ngay, không chờ chu kỳ 3s."""
+        self._wake.set()
 
-    def _broadcaster_loop(self) -> None:
-        """
-        [Thread 2 - UDP Broadcaster]
-        Vòng lặp định kỳ mỗi 3 giây đọc thông tin từ self.shared_state.get_my_info()
-        và gửi gói tin UDP broadcast.
-        TODO [Thành viên A]: Hiện thực vòng lặp phát broadcast mỗi 3s.
-        """
-        pass
+    # ------------------------------------------------------------ Thread 2
+    def _broadcast_loop(self) -> None:
+        tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        tx.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        try:
+            while not self._stop.is_set():
+                name, port, status = self.state.get_my_info()
+                try:
+                    tx.sendto(f"HELLO|{name}|{port}|{status}".encode("utf-8"),
+                              (self.broadcast_addr, self.udp_port))
+                except OSError:
+                    pass                  # UDP: mất gói chấp nhận được
+                self._wake.wait(self.interval)
+                self._wake.clear()
+        finally:
+            tx.close()
 
-    def _listener_loop(self) -> None:
-        """
-        [Thread 3 - UDP Listener]
-        Vòng lặp nhận datagram từ cổng 9999:
-        1. Bóc tách gói tin 'HELLO|<name>|<tcp_port>|<status>'.
-        2. Gọi self.shared_state.upsert_peer(...).
-        3. Nếu có peer mới vào ('joined') hoặc đổi trạng thái ('status_changed'),
-           bắn tín hiệu self.signals.peer_list_updated.emit() và self.signals.system_notification.emit(...).
-        4. Định kỳ gọi self.shared_state.remove_expired_peers(10.0) để xóa peer mất kết nối quá 10s
-           và thông báo lên UI khi có peer offline.
-        TODO [Thành viên A]: Hiện thực vòng lặp lắng nghe và kiểm tra timeout 10s.
-        """
-        pass
+    # ------------------------------------------------------------ Thread 3
+    def _listen_loop(self) -> None:
+        last_scan = time.time()
+        while not self._stop.is_set():
+            try:
+                data, (ip, _) = self._rx.recvfrom(1024)
+                self._handle_packet(data, ip)
+            except socket.timeout:
+                pass
+            except OSError:
+                break
+            if time.time() - last_scan >= self.scan_interval:
+                last_scan = time.time()
+                self._scan_timeouts()
+
+    def _handle_packet(self, data: bytes, ip: str) -> None:
+        try:
+            kind, name, port, status = data.decode("utf-8").split("|")
+            port = int(port)
+        except (UnicodeDecodeError, ValueError):
+            return                        # gói rác -> bỏ qua
+        my_name = self.state.get_my_info()[0]
+        if kind != "HELLO" or not name or name == my_name:
+            return                        # lọc gói của chính mình
+        if status not in VALID_STATUSES or not 0 < port < 65536:
+            return
+        result = self.state.upsert_peer(name, ip, port, status)
+        if result == "joined":
+            self._emit_notification(f"[*] {name} is now online")
+        if result is not None:
+            self._emit_list_updated()
+
+    def _scan_timeouts(self) -> None:
+        gone = self.state.remove_expired_peers(self.timeout)
+        for p in gone:
+            self._emit_notification(f"[*] {p.name} went offline")
+        if gone:
+            self._emit_list_updated()
+
+    # ------------------------------------------------------------ signals
+    def _emit_list_updated(self):
+        self._safe(lambda: self.signals.peer_list_updated.emit())
+
+    def _emit_notification(self, text):
+        self._safe(lambda: self.signals.system_notification.emit(text))
+
+    def _safe(self, fn):
+        if self.signals is None:
+            return
+        try:
+            fn()
+        except Exception as e:            # lỗi UI không được giết thread mạng
+            print(f"[!] signal error: {e}")
