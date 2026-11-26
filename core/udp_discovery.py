@@ -20,12 +20,19 @@ from .shared_state import SharedState
 
 
 class UDPDiscoveryService:
-    def __init__(self, state: SharedState, udp_port: int = 9999,
+    def __init__(self, state: SharedState = None, udp_port: int = 9999,
                  broadcast_addr: str = "255.255.255.255", signals=None,
-                 interval: float = 3.0, timeout: float = 10.0, scan_interval: float = 1.0):
-        self.state = state
+                 interval: float = 3.0, timeout: float = 10.0, scan_interval: float = 1.0,
+                 *, shared_state: SharedState = None, broadcast_ip: str = None):
+        resolved_state = state if state is not None else shared_state
+        if resolved_state is None:
+            raise TypeError("UDPDiscoveryService requires 'state' or 'shared_state'")
+        resolved_broadcast = broadcast_ip if broadcast_ip is not None else broadcast_addr
+        self.state = resolved_state
+        self.shared_state = resolved_state
         self.udp_port = udp_port
-        self.broadcast_addr = broadcast_addr
+        self.broadcast_addr = resolved_broadcast
+        self.broadcast_ip = resolved_broadcast
         self.signals = signals
         self.interval = interval
         self.timeout = timeout
@@ -104,8 +111,8 @@ class UDPDiscoveryService:
             port = int(port)
         except (UnicodeDecodeError, ValueError):
             return                        # gói rác -> bỏ qua
-        my_name = self.state.get_my_info()[0]
-        if kind != "HELLO" or not name or name == my_name:
+        my_name, my_port, _ = self.state.get_my_info()
+        if kind != "HELLO" or not name or (name == my_name and port == my_port) or name == my_name:
             return                        # lọc gói của chính mình
         if status not in VALID_STATUSES or not 0 < port < 65536:
             return

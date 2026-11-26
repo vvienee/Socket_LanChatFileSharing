@@ -22,7 +22,7 @@ import time
 from typing import Dict, List, Optional, Set, Tuple
 
 from PySide6.QtCore import QSize, Qt, QTimer, Slot
-from PySide6.QtGui import QCloseEvent, QFont, QKeyEvent
+from PySide6.QtGui import QCloseEvent, QColor, QFont, QKeyEvent, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -47,6 +47,8 @@ from core.shared_state import SharedState
 from ui.command_parser import SELF_SENDER_ID, CommandParser
 from ui.qt_signals import AppSignals
 
+TEXT_COLOR = "#2c3e50"
+PLACEHOLDER_COLOR = "#95a5a6"
 STATUS_COLORS = {"online": "#2ecc71", "away": "#f39c12"}
 OFFLINE_COLOR = "#95a5a6"
 SELF_COLOR = "#2471a3"
@@ -58,41 +60,56 @@ PROGRESS_HIDE_DELAY_MS = 2000   # Ẩn thanh tiến độ sau khi lượt truy�
 INPUT_HISTORY_LIMIT = 100
 
 STYLESHEET = """
-QMainWindow, QWidget#centralWidget { background: #f4f6f8; }
-QWidget#sidebar { background: #ffffff; border-right: 1px solid #dfe3e8; }
+QMainWindow, QWidget#centralWidget { background: #f4f6f8; color: #2c3e50; }
+QWidget#sidebar { background: #ffffff; border-right: 1px solid #dfe3e8; color: #2c3e50; }
+QLabel { color: #2c3e50; }
 QLabel#myNameLabel { font-size: 16px; font-weight: bold; color: #2c3e50; }
 QLabel#myPortLabel, QLabel#chatSubLabel, QLabel#hintLabel { color: #7f8c8d; }
 QLabel#sectionLabel { color: #7f8c8d; font-weight: bold; letter-spacing: 1px; margin-top: 8px; }
 QLabel#chatHeaderLabel { font-size: 15px; font-weight: bold; color: #2c3e50; }
-QListWidget#peerList { border: none; background: transparent; outline: 0; }
-QListWidget#peerList::item { border-radius: 6px; margin: 1px 0; }
+QListWidget#peerList { border: none; background: transparent; outline: 0; color: #2c3e50; }
+QListWidget#peerList::item { border-radius: 6px; margin: 1px 0; color: #2c3e50; }
 QListWidget#peerList::item:hover { background: #eef3f8; }
-QListWidget#peerList::item:selected { background: #d6eaf8; }
+QListWidget#peerList::item:selected { background: #d6eaf8; color: #2c3e50; }
 QLabel#unreadBadge {
     background: #e74c3c; color: white; border-radius: 7px;
     padding: 1px 6px; font-weight: bold; min-width: 8px;
 }
 QTextEdit#chatDisplay {
-    background: #ffffff; border: 1px solid #dfe3e8; border-radius: 8px; padding: 6px;
+    background: #ffffff; color: #2c3e50;
+    selection-background-color: #3498db; selection-color: #ffffff;
+    border: 1px solid #dfe3e8; border-radius: 8px; padding: 6px;
 }
 QLineEdit#messageInput {
-    background: #ffffff; border: 1px solid #c8d0d8; border-radius: 6px; padding: 7px;
+    background: #ffffff; color: #2c3e50;
+    selection-background-color: #3498db; selection-color: #ffffff;
+    border: 1px solid #c8d0d8; border-radius: 6px; padding: 7px;
 }
-QLineEdit#messageInput:focus { border: 1px solid #3498db; }
+QLineEdit#messageInput:focus { border: 1px solid #3498db; color: #2c3e50; }
 QPushButton {
     background: #3498db; color: white; border: none; border-radius: 6px; padding: 7px 14px;
 }
 QPushButton:hover { background: #2e86c1; }
-QPushButton:disabled { background: #bdc3c7; }
+QPushButton:disabled { background: #bdc3c7; color: #ffffff; }
 QPushButton#leaveButton { background: #e74c3c; }
 QPushButton#leaveButton:hover { background: #cb4335; }
-QPushButton#leaveButton:disabled { background: #bdc3c7; }
+QPushButton#leaveButton:disabled { background: #bdc3c7; color: #ffffff; }
 QProgressBar {
-    border: 1px solid #c8d0d8; border-radius: 6px; background: #ffffff;
+    border: 1px solid #c8d0d8; border-radius: 6px; background: #ffffff; color: #2c3e50;
     text-align: center; height: 18px;
 }
 QProgressBar::chunk { background: #2ecc71; border-radius: 5px; }
-QComboBox { padding: 4px 8px; border: 1px solid #c8d0d8; border-radius: 6px; background: #ffffff; }
+QComboBox {
+    padding: 4px 8px; border: 1px solid #c8d0d8; border-radius: 6px;
+    background: #ffffff; color: #2c3e50;
+}
+QComboBox QAbstractItemView {
+    background: #ffffff; color: #2c3e50;
+    selection-background-color: #d6eaf8; selection-color: #2c3e50;
+}
+QToolTip {
+    background: #ffffff; color: #2c3e50; border: 1px solid #c8d0d8;
+}
 """
 
 
@@ -149,6 +166,7 @@ class PeerItemWidget(QWidget):
         name_label = QLabel(f"{index}. {peer.name}")
         name_label.setTextFormat(Qt.PlainText)
         name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        name_label.setStyleSheet(f"color: {TEXT_COLOR};")
         name_font = name_label.font()
         name_font.setBold(is_active or unread > 0)
         name_label.setFont(name_font)
@@ -243,6 +261,7 @@ class MainWindow(QMainWindow):
         my_name, my_port, my_status = self.shared_state.get_my_info()
         self.resize(980, 640)
         self.setMinimumSize(720, 460)
+        self._apply_light_palette()
         self.setStyleSheet(STYLESHEET)
         base_font = QFont("Segoe UI", 10)
         self.setFont(base_font)
@@ -349,6 +368,12 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 3)
         splitter.setSizes([250, 730])
 
+        self.message_input.ensurePolished()
+        input_palette = self.message_input.palette()
+        input_palette.setColor(QPalette.Base, QColor("#ffffff"))
+        input_palette.setColor(QPalette.Text, QColor(TEXT_COLOR))
+        input_palette.setColor(QPalette.PlaceholderText, QColor(PLACEHOLDER_COLOR))
+        self.message_input.setPalette(input_palette)
         self.message_input.setFocus()
 
     def _connect_signals(self) -> None:
@@ -601,6 +626,29 @@ class MainWindow(QMainWindow):
     # Tiện ích hiển thị
     # ------------------------------------------------------------------
 
+    def _apply_light_palette(self) -> None:
+        """
+        Đặt bảng màu (QPalette) sáng nhất quán để khi Windows bật Dark Mode,
+        chữ và placeholder không bị biến thành màu trắng trùng với nền trắng.
+        """
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor("#f4f6f8"))
+        palette.setColor(QPalette.WindowText, QColor(TEXT_COLOR))
+        palette.setColor(QPalette.Base, QColor("#ffffff"))
+        palette.setColor(QPalette.AlternateBase, QColor("#f4f6f8"))
+        palette.setColor(QPalette.Text, QColor(TEXT_COLOR))
+        palette.setColor(QPalette.PlaceholderText, QColor(PLACEHOLDER_COLOR))
+        palette.setColor(QPalette.Button, QColor("#ffffff"))
+        palette.setColor(QPalette.ButtonText, QColor(TEXT_COLOR))
+        palette.setColor(QPalette.Highlight, QColor("#3498db"))
+        palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+        palette.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
+        palette.setColor(QPalette.ToolTipText, QColor(TEXT_COLOR))
+        self.setPalette(palette)
+        app = QApplication.instance()
+        if app is not None:
+            app.setPalette(palette)
+
     def _apply_active_peer(self, peer: Optional[PeerInfo]) -> None:
         """Cập nhật biến trạng thái, tiêu đề khung chat và các nút phụ thuộc vào việc đang chat hay không."""
         self._active_peer_id = peer.peer_id if peer else None
@@ -691,7 +739,8 @@ class MainWindow(QMainWindow):
         color = SELF_COLOR if message.sender_id == SELF_SENDER_ID else PEER_COLOR
         return (
             f'<span style="color:#aab7b8;">{timestamp}</span> '
-            f'<b style="color:{color};">[{html.escape(message.sender_name)}]</b> {content}'
+            f'<b style="color:{color};">[{html.escape(message.sender_name)}]</b> '
+            f'<span style="color:{TEXT_COLOR};">{content}</span>'
         )
 
     @staticmethod

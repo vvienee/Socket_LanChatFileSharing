@@ -15,10 +15,12 @@ from network.file_transfer import FileTransferService
 from network.protocol import (
     FRAME_BYE,
     FRAME_FILE,
+    FRAME_HELLO,
     FRAME_MSG,
     ENCODING,
     encode_bye,
     encode_msg,
+    encode_tcp_hello,
     read_frame_header,
     recv_exact,
 )
@@ -135,6 +137,9 @@ class TCPConnectionManager:
 
         try:
             sock.connect((peer.ip, peer.tcp_port))
+            # Gửi ngay khung định danh HELLO|<name>|<listen_port>|<status>| để bên nhận biết chính xác peer_id.
+            my_name, my_port, my_status = self.shared_state.get_my_info()
+            sock.sendall(encode_tcp_hello(my_name, my_port, my_status))
             # Chuyển về chế độ blocking vô thời hạn sau khi kết nối thành công để chờ nhận tin.
             sock.settimeout(None)
         except (OSError, socket.timeout) as exc:
@@ -314,6 +319,39 @@ class TCPConnectionManager:
             )
             recv_thread.start()
 
+    def _rebind_connection_peer_id(
+        self,
+        old_peer_id: str,
+        new_peer_id: str,
+        conn: socket.socket,
+    ) -> None:
+        """
+        Chuyển đăng ký socket từ peer_id tạm (dự đoán theo IP/ephemeral port) sang peer_id chính xác
+        sau khi nhận khung định danh HELLO trên kết nối TCP.
+        """
+
+        if old_peer_id == new_peer_id:
+            return
+
+        old_target_sock: Optional[socket.socket] = None
+        with self._conn_lock:
+            if self._connections.get(old_peer_id) is conn:
+                self._connections.pop(old_peer_id, None)
+            existing_lock = self._send_locks.pop(old_peer_id, None)
+
+            if new_peer_id in self._connections and self._connections[new_peer_id] is not conn:
+                old_target_sock = self._connections[new_peer_id]
+
+            self._connections[new_peer_id] = conn
+            if new_peer_id not in self._send_locks:
+                self._send_locks[new_peer_id] = existing_lock or threading.Lock()
+
+        if old_target_sock is not None:
+            try:
+                old_target_sock.close()
+            except OSError:
+                pass
+
     def _receiver_loop(self, conn: socket.socket, peer_id: str) -> None:
         """
         [Thread 05 - TCP Receiver (mỗi peer 01 luồng)]
@@ -322,10 +360,25 @@ class TCPConnectionManager:
 
         disconnect_reason = "Peer đã đóng kết nối."
         try:
+            remote_ip = conn.getpeername()[0]
+        except OSError:
+            remote_ip = peer_id.split(":")[0]
+
+        try:
             while self._running:
                 frame_type, args = read_frame_header(conn)
 
-                if frame_type == FRAME_BYE:
+                if frame_type == FRAME_HELLO:
+                    hello_name, hello_port_str, hello_status = args[0], args[1], args[2]
+                    hello_port = int(hello_port_str)
+                    real_peer_id = f"{remote_ip}:{hello_port}"
+                    self._rebind_connection_peer_id(peer_id, real_peer_id, conn)
+                    peer_id = real_peer_id
+                    if self.shared_state.find_peer(peer_id) is None:
+                        self.shared_state.upsert_peer(hello_name, remote_ip, hello_port, hello_status)
+                        self.signals.peer_list_updated.emit()
+
+                elif frame_type == FRAME_BYE:
                     disconnect_reason = "Peer đã rời khỏi cuộc trò chuyện (/leave)."
                     break
 

@@ -114,6 +114,7 @@ class FileTransferService:
                 f"[*] Sent {filename} (100%) Done."
             )
         except (OSError, ConnectionError) as exc:
+            self.signals.file_progress_updated.emit(peer_id, filename, -1)
             self.signals.system_notification.emit(
                 f"[!] Truyền file \"{filename}\" bị gián đoạn: {exc}."
             )
@@ -191,6 +192,7 @@ class FileTransferService:
                 except OSError:
                     pass
             if not completed:
+                self.signals.file_progress_updated.emit(peer_id, saved_name, -1)
                 self.signals.system_notification.emit(
                     f"[!] Lỗi nhận file \"{saved_name}\" (đã xóa file lỗi): {exc}."
                 )

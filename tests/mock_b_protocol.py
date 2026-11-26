@@ -151,7 +151,7 @@ def test_2_concurrent_chat_and_file() -> None:
             f"Mong đợi 50 tin nhắn nhưng nhận được {len(sig_minh.chat_message_received.events)}"
         )
 
-        print("==> PASSED: Nhận đủ 50/50 tin nhắn và toàn vẹn 100\% \file 01 MB khi chạy song song !")
+        print("==> PASSED: Nhận đủ 50/50 tin nhắn và toàn vẹn 100% file 01 MB khi chạy song song !")
     finally:
         mgr_quan.stop_all()
         mgr_minh.stop_all()

@@ -33,6 +33,18 @@ def encode_hello(name: str, tcp_port: int, status: str) -> bytes:
     return payload.encode(ENCODING)
 
 
+def encode_tcp_hello(name: str, tcp_port: int, status: str) -> bytes:
+    """
+    Đóng gói khung định danh Peer gửi ngay khi mở kết nối TCP:
+    "HELLO|<name>|<tcp_port>|<status>|".
+    Giúp bên nhận biết chính xác cổng TCP lắng nghe của bên gửi (đặc biệt khi chạy nhiều peer trên 1 máy).
+    """
+
+    safe_name = name.replace(DELIMITER, "_")
+    payload = f"{FRAME_HELLO}{DELIMITER}{safe_name}{DELIMITER}{tcp_port}{DELIMITER}{status}{DELIMITER}"
+    return payload.encode(ENCODING)
+
+
 def decode_hello(data: bytes) -> Optional[Tuple[str, int, str]]:
     """
     Giải mã bản tin UDP Presence: trả về (name, tcp_port, status) nếu hợp lệ. Ngược lại, trả về None.
@@ -145,12 +157,21 @@ def _read_until_delimiter(sock: socket.socket, delimiter: bytes = b"|") -> str:
 def read_frame_header(sock: socket.socket) -> Tuple[str, List[str]]:
     """
     Đọc từng phần header phân tách bởi ký tự "|" từ dòng TCP cho đến khi xác định được loại khung tin:
+    - Nếu là "HELLO": đọc tiếp <name>|<tcp_port>|<status>| --> return ("HELLO", [name, port_str, status]).
     - Nếu là "BYE": đọc tới dấu "|" đầu tiên --> return ("BYE", []).
     - Nếu là "MSG": đọc tiếp phần <length>| --> return ("MSG", [length_str]).
     - Nếu là "FILE": đọc tiếp phần <filename>|<size_in_bytes>| --> return ("FILE", [filename, size_str]).
     """
 
     frame_type = _read_until_delimiter(sock)
+
+    if frame_type == FRAME_HELLO:
+        name = _read_until_delimiter(sock).strip()
+        port_str = _read_until_delimiter(sock).strip()
+        status = _read_until_delimiter(sock).strip()
+        if not name or not port_str.isdigit() or not (1 <= int(port_str) <= 65535) or status not in ("online", "away"):
+            raise ValueError(f"Khung HELLO trên TCP không hợp lệ: {name!r}, {port_str!r}, {status!r}")
+        return (FRAME_HELLO, [name, port_str, status])
 
     if frame_type == FRAME_BYE:
         return (FRAME_BYE, [])

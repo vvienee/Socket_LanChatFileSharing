@@ -12,17 +12,64 @@ from .models import ChatMessage, PeerInfo, ONLINE, VALID_STATUSES
 
 
 class SharedState:
-    def __init__(self, my_name: str, my_tcp_port: int):
+    def __init__(self, my_name: str, my_tcp_port: int, initial_status: str = ONLINE):
         if not my_name or "|" in my_name:
             raise ValueError("name must be non-empty and must not contain '|'")
+        if initial_status not in VALID_STATUSES:
+            raise ValueError("status must be 'online' or 'away'")
         self._lock = threading.RLock()
         self._my_name = my_name
         self._my_port = my_tcp_port
-        self._my_status = ONLINE
+        self._my_status = initial_status
         self._peers: Dict[str, PeerInfo] = {}              # peer_id -> PeerInfo
         self._histories: Dict[str, List[ChatMessage]] = {}  # peer_id -> messages
         self._unread: Dict[str, int] = {}                   # peer_id -> unread
         self._active_id: Optional[str] = None
+
+    # ------------------------------------- thuộc tính tương thích Skeleton gốc
+    @property
+    def my_name(self) -> str:
+        return self._my_name
+
+    @my_name.setter
+    def my_name(self, value: str) -> None:
+        self._my_name = value
+
+    @property
+    def my_tcp_port(self) -> int:
+        return self._my_port
+
+    @my_tcp_port.setter
+    def my_tcp_port(self, value: int) -> None:
+        self._my_port = value
+
+    @property
+    def my_status(self) -> str:
+        return self._my_status
+
+    @my_status.setter
+    def my_status(self, value: str) -> None:
+        self._my_status = value
+
+    @property
+    def peers(self) -> Dict[str, PeerInfo]:
+        return self._peers
+
+    @property
+    def chat_histories(self) -> Dict[str, List[ChatMessage]]:
+        return self._histories
+
+    @property
+    def unread_counts(self) -> Dict[str, int]:
+        return self._unread
+
+    @property
+    def active_chat_peer_id(self) -> Optional[str]:
+        return self._active_id
+
+    @active_chat_peer_id.setter
+    def active_chat_peer_id(self, value: Optional[str]) -> None:
+        self._active_id = value
 
     # ------------------------------------------------------- bản thân
     def set_my_status(self, status: str) -> None:
@@ -48,7 +95,7 @@ class SharedState:
             self._peers[peer_id] = PeerInfo(name, ip, tcp_port, status, time.time())
             if old is None:
                 return "joined"
-            return "status_changed" if old.status != status else None
+            return "status_changed" if (old.status != status or old.name != name) else None
 
     def remove_expired_peers(self, timeout_sec: float = 10.0) -> List[PeerInfo]:
         now = time.time()
