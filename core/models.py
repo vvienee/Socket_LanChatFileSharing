@@ -1,10 +1,12 @@
 """Data Contract dùng chung cho cả nhóm (Thành viên A)."""
 import time
+import uuid
 from dataclasses import dataclass, field
 
 ONLINE = "online"
 AWAY = "away"
 VALID_STATUSES = (ONLINE, AWAY)
+RECALL_PREFIX = "__LANCHAT_RECALL__|"
 
 
 @dataclass
@@ -28,6 +30,8 @@ class ChatMessage:
     content: str
     timestamp: float = field(default_factory=time.time)
     is_system: bool = False
+    msg_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    is_recalled: bool = False
 
 
 @dataclass

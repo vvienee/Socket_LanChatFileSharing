@@ -9,7 +9,7 @@ import socket
 import threading
 import time
 from typing import Dict, Optional
-from core.models import ChatMessage, PeerInfo
+from core.models import ChatMessage, PeerInfo, RECALL_PREFIX
 from core.shared_state import SharedState
 from network.file_transfer import FileTransferService
 from network.protocol import (
@@ -389,6 +389,27 @@ class TCPConnectionManager:
 
                     peer_info = self.shared_state.find_peer(peer_id)
                     sender_name = peer_info.name if peer_info else peer_id
+
+                    if text.startswith(RECALL_PREFIX):
+                        payload_part = text[len(RECALL_PREFIX):]
+                        history_list = self.shared_state.chat_histories.get(peer_id, [])
+                        recalled_msg = None
+                        for candidate in reversed(history_list):
+                            if (
+                                candidate.sender_id == peer_id
+                                and not candidate.is_recalled
+                                and (candidate.msg_id == payload_part or candidate.content == payload_part)
+                            ):
+                                candidate.is_recalled = True
+                                candidate.content = f"{sender_name} đã thu hồi một tin nhắn"
+                                recalled_msg = candidate
+                                break
+                        if recalled_msg is not None:
+                            self.signals.chat_message_received.emit(peer_id, recalled_msg)
+                        self.signals.system_notification.emit(
+                            f"[*] {sender_name} đã thu hồi một tin nhắn."
+                        )
+                        continue
 
                     chat_msg = ChatMessage(
                         sender_name = sender_name,
