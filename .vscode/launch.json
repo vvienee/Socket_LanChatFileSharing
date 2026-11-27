@@ -2,36 +2,36 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Peer 1: Quan (Port 5001)",
+            "name": "Peer 1: Quyen (Port 5001)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "args": [
-                "--name", "Quan",
+                "--name", "Quyen",
                 "--port", "5001",
                 "--broadcast", "127.255.255.255"
             ],
             "console": "integratedTerminal"
         },
         {
-            "name": "Peer 2: Minh (Port 5002)",
+            "name": "Peer 2: Diem (Port 5002)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "args": [
-                "--name", "Minh",
+                "--name", "Diem",
                 "--port", "5002",
                 "--broadcast", "127.255.255.255"
             ],
             "console": "integratedTerminal"
         },
         {
-            "name": "Peer 3: Huy (Port 5003)",
+            "name": "Peer 3: Phat (Port 5003)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "args": [
-                "--name", "Huy",
+                "--name", "Phat",
                 "--port", "5003",
                 "--broadcast", "127.255.255.255"
             ],
@@ -40,11 +40,11 @@
     ],
     "compounds": [
         {
-            "name": "Launch 3 Peers on 1 PC (Quan, Minh, Huy)",
+            "name": "Launch 3 Peers on 1 PC (Quyen, Diem, Phat)",
             "configurations": [
-                "Peer 1: Quan (Port 5001)",
-                "Peer 2: Minh (Port 5002)",
-                "Peer 3: Huy (Port 5003)"
+                "Peer 1: Quyen (Port 5001)",
+                "Peer 2: Diem (Port 5002)",
+                "Peer 3: Phat (Port 5003)"
             ],
             "stopAll": true
         }

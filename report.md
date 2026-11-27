@@ -100,7 +100,7 @@ Trong mạng cục bộ (LAN / Wi-Fi), nhu cầu trao đổi tin nhắn nhanh v�
 
 ```text
 Socket_LanChatFileSharing/
-├── .vscode/launch.json          # Cấu hình chạy nhanh 3 peer trên 1 máy Windows (Quan, Minh, Huy)
+├── .vscode/launch.json          # Cấu hình chạy nhanh 3 peer trên 1 máy Windows (Quyen, Diem, Phat)
 ├── core/                        # [Thành viên A] Trạng thái dùng chung & UDP Discovery
 │   ├── models.py                # Dataclass: PeerInfo, ChatMessage, FileTransferProgress
 │   ├── shared_state.py          # SharedState bảo vệ bằng threading.RLock
@@ -242,7 +242,7 @@ Mỗi peer lắng nghe trên cùng một cổng UDP `9999` (cấu hình `SO_REUS
 
 ```text
 HELLO|<name>|<tcp_port>|<status>
-Ví dụ: HELLO|Quan|5001|online
+Ví dụ: HELLO|Quyen|5001|online
 ```
 
 - **Định danh Peer (`peer_id`):** Mỗi peer được định danh duy nhất bởi chuỗi `<ip>:<tcp_port>` (cổng lắng nghe TCP trích từ bản tin `HELLO`, kết hợp IP nguồn trả về bởi `recvfrom()`). Nếu cùng một tên người dùng khởi động lại trên cổng TCP khác, `upsert_peer()` tự động xóa bản ghi cổng cũ để danh sách luôn sạch.
@@ -253,32 +253,32 @@ Ví dụ: HELLO|Quan|5001|online
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Q as Máy Quan (UDP :9999)
-    participant M as Máy Minh (Thread 3: UDP Listener)
-    participant SS as Minh: SharedState (RLock)
-    participant UI as Minh: MainWindow (Thread 1)
+    participant Q as Máy Quyên (UDP :9999)
+    participant D as Máy Diễm (Thread 3: UDP Listener)
+    participant SS as Diễm: SharedState (RLock)
+    participant UI as Diễm: MainWindow (Thread 1)
 
     loop Định kỳ mỗi 3 giây (Thread 2 - Broadcaster)
-        Q->>M: UDP Broadcast: "HELLO|Quan|5001|online"
+        Q->>D: UDP Broadcast: "HELLO|Quyen|5001|online"
     end
-    M->>SS: upsert_peer("Quan", ip, 5001, "online")
-    SS-->>M: "joined"
-    M->>UI: signals.system_notification.emit("[*] Quan is now online")
-    M->>UI: signals.peer_list_updated.emit()
+    D->>SS: upsert_peer("Quyen", ip, 5001, "online")
+    SS-->>D: "joined"
+    D->>UI: signals.system_notification.emit("[*] Quyen is now online")
+    D->>UI: signals.peer_list_updated.emit()
 
-    Note over Q,M: Quan gõ "/status away" -> _wake.set() phát ngay
-    Q->>M: UDP Broadcast: "HELLO|Quan|5001|away"
-    M->>SS: upsert_peer("Quan", ip, 5001, "away")
-    SS-->>M: "status_changed"
-    M->>UI: signals.peer_list_updated.emit()
+    Note over Q,D: Quyên gõ "/status away" -> _wake.set() phát ngay
+    Q->>D: UDP Broadcast: "HELLO|Quyen|5001|away"
+    D->>SS: upsert_peer("Quyen", ip, 5001, "away")
+    SS-->>D: "status_changed"
+    D->>UI: signals.peer_list_updated.emit()
 
-    Note over Q,M: Quan tắt ứng dụng / mất mạng (> 10 giây im lặng)
+    Note over Q,D: Quyên tắt ứng dụng / mất mạng (> 10 giây im lặng)
     loop Quét mỗi 1 giây
-        M->>SS: remove_expired_peers(timeout_sec=10.0)
+        D->>SS: remove_expired_peers(timeout_sec=10.0)
     end
-    SS-->>M: [PeerInfo("Quan")]
-    M->>UI: signals.system_notification.emit("[*] Quan went offline")
-    M->>UI: signals.peer_list_updated.emit()
+    SS-->>D: [PeerInfo("Quyen")]
+    D->>UI: signals.system_notification.emit("[*] Quyen went offline")
+    D->>UI: signals.peer_list_updated.emit()
 ```
 *Sơ đồ 3.1: Luồng UDP Discovery, cập nhật trạng thái tức thời và cơ chế xóa peer sau 10 giây timeout.*
 
@@ -332,35 +332,35 @@ Khi một người dùng đang trò chuyện với đối tác hiện tại (`ac
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Q as Máy Quan (Peer)
-    participant M_TCP as Máy Minh (Thread 4/5/6)
-    participant M_SS as Minh: SharedState
-    participant M_UI as Minh: MainWindow (Active = Huy)
+    participant Q as Máy Quyên (Peer)
+    participant D_TCP as Máy Diễm (Thread 4/5/6)
+    participant D_SS as Diễm: SharedState
+    participant D_UI as Diễm: MainWindow (Active = Phát)
 
-    Note over Q,M_UI: 1. Minh đang chat với Huy. Quan gõ "/chat Minh"
-    Q->>M_TCP: TCP 3-Way Handshake (SYN -> SYN,ACK -> ACK)
-    M_TCP->>M_TCP: Thread 4 accept() -> sinh Thread 5 (Receiver)
-    Q->>M_TCP: Khung TCP "HELLO|Quan|5001|online|"
-    M_TCP->>M_TCP: _rebind_connection_peer_id() -> peer_id = "ip_Q:5001"
+    Note over Q,D_UI: 1. Diễm đang chat với Phát. Quyên gõ "/chat Diem"
+    Q->>D_TCP: TCP 3-Way Handshake (SYN -> SYN,ACK -> ACK)
+    D_TCP->>D_TCP: Thread 4 accept() -> sinh Thread 5 (Receiver)
+    Q->>D_TCP: Khung TCP "HELLO|Quyen|5001|online|"
+    D_TCP->>D_TCP: _rebind_connection_peer_id() -> peer_id = "ip_Q:5001"
 
-    Q->>M_TCP: "MSG|27|Minh, did you get slides?"
-    M_TCP->>M_TCP: read_frame_header() -> recv_exact(27)
-    M_TCP->>M_SS: append_message("ip_Q:5001", msg)
-    M_SS-->>M_TCP: unread = 1 (vì active_chat là Huy)
-    M_TCP->>M_UI: chat_message_received + system_notification(1 unread) + peer_list_updated
+    Q->>D_TCP: "MSG|25|Diem, did you get slides?"
+    D_TCP->>D_TCP: read_frame_header() -> recv_exact(25)
+    D_TCP->>D_SS: append_message("ip_Q:5001", msg)
+    D_SS-->>D_TCP: unread = 1 (vì active_chat là Phát)
+    D_TCP->>D_UI: chat_message_received + system_notification(1 unread) + peer_list_updated
 
-    Note over Q,M_UI: 2. Minh click "Quan" trên Sidebar hoặc gõ "/chat Quan"
-    M_UI->>M_SS: set_active_chat("ip_Q:5001")
-    M_SS-->>M_UI: Reset unread = 0, trả về lịch sử tin nhắn
-    M_UI->>M_UI: Vẽ lịch sử kèm vạch đỏ "──── 1 unread ────"
+    Note over Q,D_UI: 2. Diễm click "Quyen" trên Sidebar hoặc gõ "/chat Quyen"
+    D_UI->>D_SS: set_active_chat("ip_Q:5001")
+    D_SS-->>D_UI: Reset unread = 0, trả về lịch sử tin nhắn
+    D_UI->>D_UI: Vẽ lịch sử kèm vạch đỏ "──── 1 unread ────"
 
-    Note over Q,M_UI: 3. Quan gửi file qua Thread 6 (64KB/chunk)
-    Q->>M_TCP: "FILE|slides.pdf|2516582|" + raw bytes (chunks 64KB)
+    Note over Q,D_UI: 3. Quyên gửi file qua Thread 6 (64KB/chunk)
+    Q->>D_TCP: "FILE|slides.pdf|2516582|" + raw bytes (chunks 64KB)
     loop Đọc từng chunk 64KB bằng recv_exact()
-        M_TCP->>M_TCP: Ghi xuống downloads/slides.pdf (hoặc slides(1).pdf nếu trùng)
-        M_TCP->>M_UI: file_progress_updated(peer_id, filename, percent%)
+        D_TCP->>D_TCP: Ghi xuống downloads/slides.pdf (hoặc slides(1).pdf nếu trùng)
+        D_TCP->>D_UI: file_progress_updated(peer_id, filename, percent%)
     end
-    M_TCP->>M_UI: system_notification('File "slides.pdf" saved to "downloads/"')
+    D_TCP->>D_UI: system_notification('File "slides.pdf" saved to "downloads/"')
 ```
 *Sơ đồ 3.2: Luồng kết nối TCP có định danh `HELLO|`, xử lý tin nhắn chưa đọc (`unread`) và truyền nhận file bất đồng bộ.*
 
@@ -427,7 +427,7 @@ flowchart LR
 | Lệnh / Nhập liệu | Tham số & Ví dụ | Mô tả hoạt động & Quy ước phản hồi | Thao tác chuột tương đương |
 | :--- | :--- | :--- | :--- |
 | `/list` | Không có | In bảng căn cột thẳng hàng gồm số thứ tự 1-based, tên, `ip:port`, trạng thái, dấu `<- chatting` và `<n> unread`. | Quan sát cột trái **ONLINE USERS** |
-| `/chat` | `<name\|number>`<br>VD: `/chat 1`, `/chat Minh` | Tìm peer (theo số, tên không phân biệt hoa/thường hoặc `peer_id`), mở/tái sử dụng TCP, reset `unread`, vẽ lịch sử kèm vạch đỏ `──── n unread ────`. | Click trực tiếp vào tên peer trên Sidebar |
+| `/chat` | `<name\|number>`<br>VD: `/chat 1`, `/chat Diem` | Tìm peer (theo số, tên không phân biệt hoa/thường hoặc `peer_id`), mở/tái sử dụng TCP, reset `unread`, vẽ lịch sử kèm vạch đỏ `──── n unread ────`. | Click trực tiếp vào tên peer trên Sidebar |
 | `<any text>` | Văn bản bất kỳ (hỗ trợ UTF-8 tiếng Việt) | Gửi khung `MSG\|` tới `active_chat`; chỉ ghi vào lịch sử (`sender_id="SELF"`) khi gửi thành công. | Nhập văn bản + bấm nút **Send** |
 | `/send` | `<file>` (hỗ trợ ngoặc kép chứa dấu cách & `\` Windows) | Kiểm tra tồn tại tệp, định dạng dung lượng (`B`/`KB`/`MB`/`GB`) và khởi chạy Thread 6 truyền file. | Bấm nút **`Send File...`** chọn tệp |
 | `/leave` | Không có | Gửi khung `BYE\|`, đóng socket TCP với peer hiện tại, đưa giao diện về trạng thái chờ. | Bấm nút đỏ **`Leave (/leave)`** |
@@ -462,7 +462,7 @@ Theo yêu cầu Mục 7.3 của `docs/plan.md`, nhóm sử dụng công cụ **W
 ### 5.2. Gói tin UDP Discovery Broadcast (`udp.port == 9999`)
 
 - **Display Filter:** `udp.port == 9999`
-- **Thao tác bắt gói:** Khởi chạy `Quan` (`--port 5001`) và `Minh` (`--port 5002`), đợi 6–9 giây để thấy ít nhất 2 chu kỳ broadcast, sau đó gõ `/status away` trên máy `Quan`.
+- **Thao tác bắt gói:** Khởi chạy `Quyen` (`--port 5001`) và `Diem` (`--port 5002`), đợi 6–9 giây để thấy ít nhất 2 chu kỳ broadcast, sau đó gõ `/status away` trên máy Quyên.
 
 ![Hình 5.1: Ảnh chụp Wireshark các gói tin UDP Discovery Broadcast trên cổng 9999](docs/images/wireshark_01_udp_broadcast.png)
 *Hình 5.1: Gói tin UDP Broadcast mang thông điệp `HELLO|<name>|<tcp_port>|<status>` gửi định kỳ 3 giây tới cổng `9999`.*
@@ -470,34 +470,34 @@ Theo yêu cầu Mục 7.3 của `docs/plan.md`, nhóm sử dụng công cụ **W
 **Phân tích kỹ thuật:**
 - Cột **Protocol** hiển thị `UDP`, cổng đích là `9999`, địa chỉ đích là `255.255.255.255` (hoặc địa chỉ subnet broadcast `192.168.x.255` / `127.255.255.255` trên loopback).
 - Chênh lệch dấu thời gian (**Time**) giữa hai gói tin liên tiếp của cùng một peer xấp xỉ **3.0 giây**; riêng tại thời điểm người dùng gõ `/status away`, xuất hiện ngay một gói phát tức thì nhờ cơ chế đánh thức `_wake.set()`.
-- Trong phần dữ liệu (**Data**), chuỗi ASCII thể hiện rõ `HELLO|Quan|5001|online` chuyển sang `HELLO|Quan|5001|away`. Nhờ bản chất phi kết nối của UDP, toàn bộ peer trong LAN tự nhận diện nhau không cần cấu hình IP thủ công.
+- Trong phần dữ liệu (**Data**), chuỗi ASCII thể hiện rõ `HELLO|Quyen|5001|online` chuyển sang `HELLO|Quyen|5001|away`. Nhờ bản chất phi kết nối của UDP, toàn bộ peer trong LAN tự nhận diện nhau không cần cấu hình IP thủ công.
 
 ### 5.3. Bắt tay 3 bước TCP (TCP Three-Way Handshake)
 
-- **Display Filter:** `tcp.port == 5002` *(cổng lắng nghe của máy đích Minh)*
-- **Thao tác bắt gói:** Trên cửa sổ `Quan`, thực hiện lệnh `/chat Minh` (hoặc click vào tên `Minh` trên Sidebar).
+- **Display Filter:** `tcp.port == 5002` *(cổng lắng nghe của máy đích Diễm)*
+- **Thao tác bắt gói:** Trên cửa sổ của Quyên, thực hiện lệnh `/chat Diem` (hoặc click vào tên `Diem` trên Sidebar).
 
 ![Hình 5.2: Ảnh chụp Wireshark quá trình bắt tay 3 bước TCP (SYN, SYN-ACK, ACK)](docs/images/wireshark_02_tcp_handshake.png)
-*Hình 5.2: Ba gói tin thiết lập kết nối TCP (`[SYN]` → `[SYN, ACK]` → `[ACK]`) giữa cổng tạm của Quan và cổng lắng nghe `5002` của Minh.*
+*Hình 5.2: Ba gói tin thiết lập kết nối TCP (`[SYN]` → `[SYN, ACK]` → `[ACK]`) giữa cổng tạm của Quyên và cổng lắng nghe `5002` của Diễm.*
 
 **Phân tích kỹ thuật:**
-- Ngay khi `connect_to_peer()` gọi `sock.connect((peer.ip, 5002))`, hệ điều hành cấp cho Quan một cổng nguồn tạm thời (**ephemeral port**, ví dụ `54321`) và thực hiện đủ 3 bước bắt tay TCP:
-  1. `Quan:ephemeral -> Minh:5002` — cờ **`[SYN]`**, `Seq=0` (yêu cầu mở kết nối).
-  2. `Minh:5002 -> Quan:ephemeral` — cờ **`[SYN, ACK]`**, `Seq=0, Ack=1` (chấp nhận và xác nhận).
-  3. `Quan:ephemeral -> Minh:5002` — cờ **`[ACK]`**, `Seq=1, Ack=1` (hoàn tất thiết lập kênh tin cậy).
-- Ngay gói `PSH, ACK` đầu tiên sau bước 3, Quan gửi khung định danh `HELLO|Quan|5001|online|` để Minh biết cổng lắng nghe thật của Quan là `5001` thay vì cổng tạm `54321`.
+- Ngay khi `connect_to_peer()` gọi `sock.connect((peer.ip, 5002))`, hệ điều hành cấp cho Quyên một cổng nguồn tạm thời (**ephemeral port**, ví dụ `54321`) và thực hiện đủ 3 bước bắt tay TCP:
+  1. `Quyen:ephemeral -> Diem:5002` — cờ **`[SYN]`**, `Seq=0` (yêu cầu mở kết nối).
+  2. `Diem:5002 -> Quyen:ephemeral` — cờ **`[SYN, ACK]`**, `Seq=0, Ack=1` (chấp nhận và xác nhận).
+  3. `Quyen:ephemeral -> Diem:5002` — cờ **`[ACK]`**, `Seq=1, Ack=1` (hoàn tất thiết lập kênh tin cậy).
+- Ngay gói `PSH, ACK` đầu tiên sau bước 3, Quyên gửi khung định danh `HELLO|Quyen|5001|online|` để Diễm biết cổng lắng nghe thật của Quyên là `5001` thay vì cổng tạm `54321`.
 
 ### 5.4. Khung Đóng gói Tin nhắn UTF-8 (`MSG|<byte_length>|<text>`)
 
 - **Display Filter:** `tcp.port == 5002 and tcp.len > 0` *(kết hợp chuột phải → Follow → TCP Stream)*
-- **Thao tác bắt gói:** Gửi một câu tiếng Việt có dấu từ Quan tới Minh (ví dụ: `Xin chào Minh`).
+- **Thao tác bắt gói:** Gửi một câu tiếng Việt có dấu từ Quyên tới Diễm (ví dụ: `Xin chào Diễm`).
 
 ![Hình 5.3: Ảnh chụp Wireshark khung đóng gói tin nhắn TCP với độ dài tính theo byte UTF-8](docs/images/wireshark_03_tcp_msg_framing.png)
-*Hình 5.3: Nội dung TCP Stream cho thấy khung định danh `HELLO|...` và khung tin nhắn `MSG|14|Xin chào Minh` (14 bytes UTF-8 cho 13 ký tự).*
+*Hình 5.3: Nội dung TCP Stream cho thấy khung định danh `HELLO|...` và khung tin nhắn `MSG|16|Xin chào Diễm` (16 bytes UTF-8 cho 13 ký tự).*
 
 **Phân tích kỹ thuật:**
-- Chuỗi `"Xin chào Minh"` có **13 ký tự**, nhưng chữ `à` trong chuẩn UTF-8 chiếm **2 byte** (`0xC3 0xA0`), nên tổng kích thước phần thân là **14 byte**.
-- Payload quan sát được trên Wireshark bắt đầu bằng `MSG|14|Xin chào Minh`. Bên nhận tách dấu `|` để lấy `14`, sau đó gọi `recv_exact(conn, 14)` nên không bao giờ cắt hỏng ký tự tiếng Việt hay nuốt nhầm byte đầu của gói tin tiếp theo.
+- Chuỗi `"Xin chào Diễm"` có **13 ký tự**, nhưng trong chuẩn UTF-8 chữ `à` chiếm **2 byte** (`0xC3 0xA0`) và chữ `ễ` chiếm **3 byte** (`0xE1 0xBB 0x85`), nên tổng kích thước phần thân là **16 byte** (`11 × 1 + 2 + 3 = 16`).
+- Payload quan sát được trên Wireshark bắt đầu bằng `MSG|16|Xin chào Diễm`. Bên nhận tách dấu `|` để lấy `16`, sau đó gọi `recv_exact(conn, 16)` nên không bao giờ cắt hỏng ký tự tiếng Việt hay nuốt nhầm byte đầu của gói tin tiếp theo.
 
 ### 5.5. Truyền Tập tin (`FILE|...`) và Đóng Kết nối Lịch sự (`BYE|`)
 
@@ -518,7 +518,7 @@ Theo yêu cầu Mục 7.3 của `docs/plan.md`, nhóm sử dụng công cụ **W
 Trong quá trình triển khai từng phân hệ và tích hợp tổng thể (đặc biệt được ghi nhận rõ qua các bản vá ở commit tích hợp cuối), nhóm đã gặp và xử lý dứt điểm **8 vấn đề kỹ thuật thực tế**:
 
 ### 6.1. Nhận diện sai Peer trên Kết nối TCP đến do Ephemeral Port (khi chạy nhiều Peer cùng IP)
-- **Vấn đề:** Khi Peer A (`127.0.0.1:5001`) gọi `connect()` tới Peer B (`127.0.0.1:5002`), hàm `accept()` phía B nhận được địa chỉ nguồn là `(127.0.0.1, <cổng_ngẫu_nhiên>)`, không phải cổng lắng nghe `5001`. Nếu có 3 peer (`Quan`, `Minh`, `Huy`) chạy trên cùng một máy tính (cùng IP `127.0.0.1`), việc tra ngược theo IP trong `_resolve_peer_from_ip()` có thể gắn nhầm kết nối của `Huy` thành `Quan`, gây sai tên người gửi và sai bộ đếm `unread`.
+- **Vấn đề:** Khi Peer A (`127.0.0.1:5001`) gọi `connect()` tới Peer B (`127.0.0.1:5002`), hàm `accept()` phía B nhận được địa chỉ nguồn là `(127.0.0.1, <cổng_ngẫu_nhiên>)`, không phải cổng lắng nghe `5001`. Nếu có 3 peer (`Quyen`, `Diem`, `Phat`) chạy trên cùng một máy tính (cùng IP `127.0.0.1`), việc tra ngược theo IP trong `_resolve_peer_from_ip()` có thể gắn nhầm kết nối của Phát thành Quyên, gây sai tên người gửi và sai bộ đếm `unread`.
 - **Giải pháp:** Bổ sung khung định danh TCP `HELLO|<name>|<tcp_port>|<status>|` (`encode_tcp_hello`) gửi ngay sau khi `sock.connect()` thành công. Ở đầu nhận (`_receiver_loop`), ngay khi đọc khung `HELLO`, `TCPConnectionManager` gọi `_rebind_connection_peer_id()` để chuyển ánh xạ socket và `send_lock` từ `peer_id` tạm sang đúng `<remote_ip>:<hello_port>`:
   ```python
   # network/tcp_manager.py (_receiver_loop)
@@ -587,10 +587,10 @@ Nhóm đã kiểm chứng đầy đủ 8 nhóm kịch bản tích hợp được
 
 | STT | Kịch bản kiểm thử End-to-End | Điều kiện thực hiện | Kết quả quan sát | Đạt |
 | :---: | :--- | :--- | :--- | :---: |
-| 1 | **UDP Discovery & `/list`, `/help`** | Chạy 3 peer `Quan` (`5001`), `Minh` (`5002`), `Huy` (`5003`) trên 1 máy (VS Code `F5`) và 2 máy LAN/Wi-Fi. | Các peer tự thấy nhau trong `≤ 3s`, hiện đúng IP thật, port TCP và số thứ tự đồng bộ giữa Sidebar và `/list`. | Đạt |
+| 1 | **UDP Discovery & `/list`, `/help`** | Chạy 3 peer `Quyen` (`5001`), `Diem` (`5002`), `Phat` (`5003`) trên 1 máy (VS Code `F5`) và 2 máy LAN/Wi-Fi. | Các peer tự thấy nhau trong `≤ 3s`, hiện đúng IP thật, port TCP và số thứ tự đồng bộ giữa Sidebar và `/list`. | Đạt |
 | 2 | **Đổi trạng thái `online` / `away`** | Thử cả lệnh `/status away` và chọn trực tiếp trên `QComboBox`. | Máy kia cập nhật chấm màu vàng cam ngay lập tức (không phải đợi 3s) và đồng bộ lại ComboBox 2 chiều. | Đạt |
-| 3 | **Chat 2 chiều, nhiều Peer & `unread`** | Quan chat với Minh; Huy nhắn 2 tin tới Quan; Quan chuyển sang Huy. | Tin của Huy không trộn vào khung Minh; hiện thông báo `(1 unread)` → `(2 unread)` + badge đỏ `2`; khi chuyển sang Huy hiện vạch đỏ `──── 2 unread ────` và xóa badge. | Đạt |
-| 4 | **Không vỡ chữ khi tin nhắn đến** | Quan gõ dở câu dài và đặt con trỏ giữa câu; Minh gửi liên tiếp nhiều tin tiếng Việt có dấu. | Tin nhắn hiện tức thì ở khung trên; chuỗi gõ dở và vị trí con trỏ trong `HistoryLineEdit` giữ nguyên 100%. | Đạt |
+| 3 | **Chat 2 chiều, nhiều Peer & `unread`** | Quyên chat với Diễm; Phát nhắn 2 tin tới Quyên; Quyên chuyển sang Phát. | Tin của Phát không trộn vào khung Diễm; hiện thông báo `(1 unread)` → `(2 unread)` + badge đỏ `2`; khi chuyển sang Phát hiện vạch đỏ `──── 2 unread ────` và xóa badge. | Đạt |
+| 4 | **Không vỡ chữ khi tin nhắn đến** | Quyên gõ dở câu dài và đặt con trỏ giữa câu; Diễm gửi liên tiếp nhiều tin tiếng Việt có dấu. | Tin nhắn hiện tức thì ở khung trên; chuỗi gõ dở và vị trí con trỏ trong `HistoryLineEdit` giữ nguyên 100%. | Đạt |
 | 5 | **Truyền file thực tế qua LAN & Chống ghi đè** | Gửi tài liệu dung lượng lớn thực tế qua mạng LAN (`Bài báo cáo.docx` – `20,757,326 bytes` ≈ `19.8 MB`) và gửi lặp lại file trùng tên. | Thanh `QProgressBar` chạy mượt tới `100% Done`, tệp lưu nguyên vẹn trong `downloads/` và mở bình thường; gửi lần 2 tự lưu thành tên `(1)`. | Đạt |
 | 6 | **Ngắt kết nối ngang khi truyền file** | Gửi file lớn `50 MB` và bấm `X` tắt cửa sổ bên gửi ở khoảng `30%`. | Bên nhận báo lỗi đỏ, thanh tiến độ chuyển `failed` rồi ẩn, file dở dang trong `downloads/` bị xóa sạch hoàn toàn. | Đạt |
 | 7 | **Timeout 10s & Bẫy lỗi đầu vào** | Tắt ngang một peer, thử `/abc`, `/chat` thiếu tham số, `/chat NguoiLa`, `/send` file không tồn tại, mở trùng cổng TCP `5000`. | Đúng `10s` sau khi peer tắt, hệ thống báo `[*] ... went offline` và xóa khỏi Sidebar; các lệnh lỗi báo `[!]` rõ ràng; trùng cổng hiện `QMessageBox.critical` và thoát sạch. | Đạt |
