@@ -9,7 +9,7 @@ import socket
 import threading
 import time
 from typing import Dict, Optional
-from core.models import ChatMessage, PeerInfo, RECALL_PREFIX
+from core.models import ChatMessage, PeerInfo, RECALL_PREFIX, REACT_PREFIX, REPLY_PREFIX
 from core.shared_state import SharedState
 from network.file_transfer import FileTransferService
 from network.protocol import (
@@ -411,12 +411,39 @@ class TCPConnectionManager:
                         )
                         continue
 
+                    if text.startswith(REACT_PREFIX):
+                        payload_part = text[len(REACT_PREFIX):]
+                        if "|" in payload_part:
+                            target_key, emoji_val = payload_part.rsplit("|", 1)
+                            history_list = self.shared_state.chat_histories.get(peer_id, [])
+                            reacted_msg = None
+                            for candidate in reversed(history_list):
+                                if not candidate.is_recalled and (
+                                    candidate.msg_id == target_key or candidate.content == target_key
+                                ):
+                                    if emoji_val:
+                                        candidate.reactions[peer_id] = emoji_val
+                                    else:
+                                        candidate.reactions.pop(peer_id, None)
+                                    reacted_msg = candidate
+                                    break
+                            if reacted_msg is not None:
+                                self.signals.chat_message_received.emit(peer_id, reacted_msg)
+                        continue
+
+                    reply_quote = ""
+                    if text.startswith(REPLY_PREFIX):
+                        payload_part = text[len(REPLY_PREFIX):]
+                        if "|" in payload_part:
+                            reply_quote, text = payload_part.split("|", 1)
+
                     chat_msg = ChatMessage(
                         sender_name = sender_name,
                         sender_id = peer_id,
                         content = text,
                         timestamp = time.time(),
                         is_system = False,
+                        reply_to_text = reply_quote,
                     )
 
                     unread = self.shared_state.append_message(peer_id, chat_msg)

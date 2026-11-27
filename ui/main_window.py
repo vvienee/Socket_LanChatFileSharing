@@ -12,10 +12,23 @@ chuyển đổi sang bố cục Desktop 2 cột kèm các tính năng nâng cao:
 
 import html
 import os
+import shutil
 import time
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-from PySide6.QtCore import QPoint, QRectF, QSize, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QPoint,
+    QPropertyAnimation,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -29,13 +42,18 @@ from PySide6.QtGui import (
     QPainterPath,
     QPalette,
     QPixmap,
+    QResizeEvent,
 )
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -55,9 +73,9 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
-from core.models import RECALL_PREFIX, ChatMessage, PeerInfo
+from core.models import REACT_PREFIX, RECALL_PREFIX, REPLY_PREFIX, ChatMessage, PeerInfo
 from core.shared_state import SharedState
-from ui.command_parser import SELF_SENDER_ID, CommandParser
+from ui.command_parser import SELF_SENDER_ID, CommandParser, format_size
 from ui.qt_signals import AppSignals
 
 # ------------------------------------------------------------------
@@ -80,19 +98,10 @@ BUBBLE_SELF_BG = "#2f80ed"      # Figma: Outgoing bubble surface (node 1:513)
 SYSTEM_COLOR = "#4f5e7b"
 ERROR_COLOR = "#eb5757"
 
-AVATAR_FILES = [
-    "avatar_1.png",
-    "avatar_2.png",
-    "avatar_3.png",
-    "avatar_4.png",
-    "avatar_5.png",
-]
+DEFAULT_AVATAR_FILE = "default_avatar.png"
+AVATAR_FILES = [DEFAULT_AVATAR_FILE]
 AVATAR_FALLBACK_COLORS = [
-    "#2f80ed",
-    "#f2994a",
-    "#27ae60",
-    "#9b51e0",
-    "#eb5757",
+    "#555555",
 ]
 
 EMOJI_LIST = [
@@ -102,6 +111,19 @@ EMOJI_LIST = [
     "🤗", "🤫", "😮", "😢", "😭", "😤", "🤯",
     "👍", "👎", "👏", "🙌", "🤝", "🙏", "💪",
     "❤️", "🧡", "💛", "💚", "💙", "🔥", "🎉",
+]
+
+REACTION_EMOJIS = ["❤️", "😆", "😮", "😢", "😡", "👍"]
+
+SLASH_COMMANDS: List[Tuple[str, str, bool]] = [
+    ("/list", "Hiển thị danh sách người dùng đang online", True),
+    ("/chat ", "Mở cuộc trò chuyện với người dùng (/chat <tên|số>)", False),
+    ("/send ", "Gửi tệp đính kèm cho người đang chat (/send <file>)", False),
+    ("/status online", "Đặt trạng thái Trực tuyến (Online)", True),
+    ("/status away", "Đặt trạng thái Vắng mặt (Away)", True),
+    ("/leave", "Rời khỏi cuộc trò chuyện hiện tại", True),
+    ("/help", "Xem bảng hướng dẫn toàn bộ các lệnh", True),
+    ("/quit", "Đóng kết nối và thoát ứng dụng", True),
 ]
 
 MAX_CHAT_BLOCKS = 5000          # Giới hạn số dòng giữ lại trong khung chat để tránh tốn RAM
@@ -125,6 +147,10 @@ QWidget#profileCard {
     background: #f8faff;
     border: 1px solid #e6ecf5;
     border-radius: 14px;
+}
+QWidget#profileCard:hover {
+    background: #f2f7ff;
+    border: 1px solid #cfe0fa;
 }
 QLabel {
     color: #1b1a57;
@@ -152,9 +178,13 @@ QLineEdit#searchInput {
     padding: 6px 12px;
     font-size: 12px;
 }
+QLineEdit#searchInput:hover {
+    background: #f9fbff;
+    border: 1px solid #b8d2f8;
+}
 QLineEdit#searchInput:focus {
     background: #ffffff;
-    border: 1px solid #2f80ed;
+    border: 1.5px solid #2f80ed;
 }
 QLabel#filterPillActive {
     background: #2f80ed;
@@ -188,13 +218,16 @@ QListWidget#peerList::item {
     border-radius: 10px;
     margin: 2px 4px;
     color: #1b1a57;
+    border: 1px solid transparent;
 }
 QListWidget#peerList::item:hover {
-    background: #f2f7fe;
+    background: #eef5ff;
+    border: 1px solid #d4e5fc;
 }
 QListWidget#peerList::item:selected {
     background: #eaf2fd;
     color: #1b1a57;
+    border: 1px solid #bdd7fb;
 }
 QLabel#unreadBadge {
     background: #2f80ed;
@@ -233,10 +266,17 @@ QFrame#bubbleSelf {
     border: none;
     border-radius: 16px;
 }
+QFrame#bubbleSelf:hover {
+    background: #2576e4;
+}
 QFrame#bubblePeer {
     background: #f7f7f7;
     border: 1px solid #eceff4;
     border-radius: 16px;
+}
+QFrame#bubblePeer:hover {
+    background: #f1f5fb;
+    border: 1px solid #dce6f5;
 }
 QFrame#bubbleRecalled {
     background: #f8f9fc;
@@ -259,21 +299,148 @@ QFrame#unreadSeparatorCard {
     border-radius: 10px;
 }
 QPushButton#bubbleMenuBtn {
-    background: transparent;
-    color: #a1a1bc;
-    border: none;
-    border-radius: 12px;
+    background: #f0f4fa;
+    color: #5c6b8a;
+    border: 1px solid #e1e8f5;
+    border-radius: 15px;
+    font-size: 19px;
+    font-weight: 800;
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0px 0px 3px 0px;
+}
+QPushButton#bubbleMenuBtn:hover {
+    background: #eaf2fd;
+    color: #2f80ed;
+    border: 1px solid #b8d4fb;
+}
+QPushButton#bubbleMenuBtn:pressed {
+    background: #d5e6fb;
+    padding-top: 2px;
+}
+QPushButton#bubbleActionBtn {
+    background: #f0f4fa;
+    color: #5c6b8a;
+    border: 1px solid #e1e8f5;
+    border-radius: 15px;
     font-size: 14px;
     font-weight: 700;
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0px;
+}
+QPushButton#bubbleActionBtn:hover {
+    background: #eaf2fd;
+    color: #2f80ed;
+    border: 1px solid #b8d4fb;
+}
+QPushButton#bubbleActionBtn:pressed {
+    background: #d5e6fb;
+    padding-top: 2px;
+}
+QPushButton#bubbleCornerReactBtn {
+    background: #ffffff;
+    color: #5c6b8a;
+    border: 1px solid #dce3ee;
+    border-radius: 12px;
+    font-size: 13px;
     min-width: 24px;
     max-width: 24px;
     min-height: 24px;
     max-height: 24px;
     padding: 0px;
 }
-QPushButton#bubbleMenuBtn:hover {
+QPushButton#bubbleCornerReactBtn:hover {
+    background: #eaf2fd;
+    border: 1px solid #2f80ed;
+}
+QPushButton#bubbleCornerReactBtn:pressed {
+    background: #d5e6fb;
+}
+QLabel#reactionBadge {
+    background: #ffffff;
+    color: #1b1a57;
+    border: 1px solid #dce3ee;
+    border-radius: 11px;
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    min-height: 20px;
+    max-height: 22px;
+}
+QFrame#quoteSelf {
+    background: rgba(255, 255, 255, 0.16);
+    border-left: 3px solid #ffffff;
+    border-radius: 6px;
+}
+QFrame#quotePeer {
+    background: #eef3fb;
+    border-left: 3px solid #2f80ed;
+    border-radius: 6px;
+}
+QFrame#replyPreviewBar {
+    background: #f5f8ff;
+    border-top: 1px solid #dce6f7;
+    border-bottom: 1px solid #eaeef4;
+}
+QFrame#replyAccentLine {
+    background: #2f80ed;
+    border-radius: 2px;
+    min-width: 3px;
+    max-width: 3px;
+}
+QPushButton#replyCloseBtn {
+    background: transparent;
+    color: #7c88a1;
+    border: none;
+    border-radius: 13px;
+    font-size: 14px;
+    font-weight: 700;
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0px;
+}
+QPushButton#replyCloseBtn:hover {
+    background: #eaf2fd;
+    color: #eb5757;
+}
+QFrame#cmdSuggestPopup {
+    background: #ffffff;
+    border: 1px solid #cfe0fa;
+    border-radius: 14px;
+}
+QLabel#cmdSuggestHeader {
+    color: #2f80ed;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 4px 10px 2px 10px;
+}
+QListWidget#cmdSuggestList {
+    background: transparent;
+    border: none;
+    outline: 0;
+    color: #1b1a57;
+    font-size: 12px;
+}
+QListWidget#cmdSuggestList::item {
+    border-radius: 8px;
+    padding: 6px 10px;
+    margin: 1px 4px;
+    color: #1b1a57;
+}
+QListWidget#cmdSuggestList::item:hover {
+    background: #f2f7fe;
+}
+QListWidget#cmdSuggestList::item:selected {
     background: #eaf2fd;
     color: #2f80ed;
+    font-weight: 700;
 }
 QWidget#channelBar {
     background: #ffffff;
@@ -298,9 +465,13 @@ QLineEdit#messageInput {
     padding: 8px 14px;
     font-size: 13px;
 }
+QLineEdit#messageInput:hover {
+    background: #fafcff;
+    border: 1px solid #b8d2f8;
+}
 QLineEdit#messageInput:focus {
     background: #ffffff;
-    border: 1px solid #2f80ed;
+    border: 1.5px solid #2f80ed;
     color: #1b1a57;
 }
 QPushButton {
@@ -313,6 +484,11 @@ QPushButton {
 }
 QPushButton:hover {
     background: #1f6fd8;
+}
+QPushButton:pressed {
+    background: #185abc;
+    padding-top: 8px;
+    padding-bottom: 6px;
 }
 QPushButton:disabled {
     background: #d5dce6;
@@ -331,6 +507,11 @@ QPushButton#emojiButton, QPushButton#sendFileButton {
 }
 QPushButton#emojiButton:hover, QPushButton#sendFileButton:hover {
     background: #eaf2fd;
+    border: 1px solid #c9defc;
+}
+QPushButton#emojiButton:pressed, QPushButton#sendFileButton:pressed {
+    background: #d5e6fb;
+    padding-top: 2px;
 }
 QPushButton#sendFileButton:disabled {
     background: transparent;
@@ -340,13 +521,20 @@ QPushButton#leaveButton {
     color: #eb5757;
     border: 1px solid #fad2d2;
     border-radius: 10px;
-    padding: 6px 12px;
+    padding: 6px 14px;
     font-size: 12px;
     font-weight: 600;
 }
 QPushButton#leaveButton:hover {
     background: #eb5757;
     color: #ffffff;
+    border: 1px solid #eb5757;
+}
+QPushButton#leaveButton:pressed {
+    background: #d64545;
+    color: #ffffff;
+    padding-top: 7px;
+    padding-bottom: 5px;
 }
 QPushButton#leaveButton:disabled {
     background: #f4f6f9;
@@ -368,22 +556,72 @@ QProgressBar::chunk {
     border-radius: 7px;
 }
 QComboBox {
-    padding: 4px 10px;
+    padding: 5px 24px 5px 10px;
     border: 1px solid #dce3ee;
-    border-radius: 8px;
+    border-radius: 13px;
     background: #ffffff;
     color: #1b1a57;
     font-size: 12px;
     font-weight: 600;
+    min-height: 18px;
+    min-width: 64px;
 }
 QComboBox:hover {
     border: 1px solid #2f80ed;
+    background: #f8fbff;
+}
+QComboBox:on {
+    border: 1px solid #2f80ed;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 22px;
+    border: none;
+    background: transparent;
+    border-top-right-radius: 13px;
+    border-bottom-right-radius: 13px;
+}
+QComboBox::down-arrow {
+    image: url(__CHEVRON_ICON_PATH__);
+    width: 11px;
+    height: 11px;
 }
 QComboBox QAbstractItemView {
     background: #ffffff;
     color: #1b1a57;
+    border: 1px solid #dce3ee;
+    border-radius: 10px;
+    padding: 4px;
+    outline: 0;
     selection-background-color: #eaf2fd;
     selection-color: #1b1a57;
+}
+QPushButton#fileDownloadBtn {
+    background: #2f80ed;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QPushButton#fileDownloadBtn:hover {
+    background: #1f6fd8;
+}
+QPushButton#fileDownloadBtn:pressed {
+    background: #185abc;
+    padding-top: 6px;
+    padding-bottom: 4px;
+}
+QPushButton#fileDownloadBtnDone {
+    background: #e8f5e9;
+    color: #1e7e34;
+    border: 1px solid #c3e6cb;
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
 }
 QMenu {
     background: #ffffff;
@@ -451,8 +689,11 @@ def _build_avatar_pixmap(
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setRenderHint(QPainter.SmoothPixmapTransform)
 
-    idx = (avatar_index if avatar_index is not None else sum(ord(c) for c in (name or "?"))) % len(AVATAR_FILES)
-    avatar_path = custom_image_path if (custom_image_path and os.path.exists(custom_image_path)) else _asset_path(AVATAR_FILES[idx])
+    avatar_path = (
+        custom_image_path
+        if (custom_image_path and os.path.exists(custom_image_path))
+        else _asset_path(DEFAULT_AVATAR_FILE)
+    )
 
     circle_path = QPainterPath()
     circle_path.addEllipse(0, 0, size, size)
@@ -466,7 +707,7 @@ def _build_avatar_pixmap(
         sy = max(0, (scaled.height() - size) // 2)
         painter.drawPixmap(0, 0, scaled, sx, sy, size, size)
     else:
-        bg_color = QColor(AVATAR_FALLBACK_COLORS[idx % len(AVATAR_FALLBACK_COLORS)])
+        bg_color = QColor("#616161")
         painter.fillPath(circle_path, bg_color)
         painter.setPen(QColor("#ffffff"))
         font = QFont("Plus Jakarta Sans", max(10, size // 3))
@@ -508,10 +749,14 @@ class ClickableAvatarLabel(QLabel):
 
 class ChatBubbleWidget(QFrame):
     """
-    Widget Bong bóng Tin nhắn bo góc tròn thật sự (border-radius: 16px):
-    - Hỗ trợ click chuột phải hoặc bấm nút '⋯' bên cạnh bong bóng để:
-      + 'Xóa ở phía bạn' (Delete for me)
-      + 'Thu hồi tin nhắn' (Unsend for everyone - như Messenger, dành cho tin nhắn của chính mình)
+    Widget Bong bóng Tin nhắn bo góc tròn thật sự (border-radius: 16px) theo thiết kế Zalo:
+    - Nút mặt cười nằm đè ở góc dưới cùng bên phải của khung bong bóng tin nhắn;
+      khi thả cảm xúc (❤️ 😆 😮 😢 😡 👍) thì hình cảm xúc đó đè lên chính nút mặt cười
+      (kèm huy hiệu đếm số lượng bên cạnh) và đồng bộ 2 chiều qua TCP.
+    - Bên cạnh bong bóng là 3 nút tròn thao tác nhanh:
+      + '❝' Nhắc lại / Trả lời tin nhắn (Reply)
+      + '➦' Chuyển tiếp tin nhắn cho người khác (Forward)
+      + '⋯' Tùy chọn thêm (Thu hồi / Xóa ở phía bạn)
     """
 
     def __init__(
@@ -520,6 +765,9 @@ class ChatBubbleWidget(QFrame):
         is_self: bool,
         on_delete_for_me: Callable[[ChatMessage], None],
         on_recall_message: Callable[[ChatMessage], None],
+        on_react_message: Optional[Callable[[ChatMessage, str], None]] = None,
+        on_reply_message: Optional[Callable[[ChatMessage], None]] = None,
+        on_forward_message: Optional[Callable[[ChatMessage], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -527,16 +775,44 @@ class ChatBubbleWidget(QFrame):
         self.is_self = is_self
         self._on_delete_for_me = on_delete_for_me
         self._on_recall_message = on_recall_message
+        self._on_react_message = on_react_message
+        self._on_reply_message = on_reply_message
+        self._on_forward_message = on_forward_message
 
         self.outer_layout = QHBoxLayout(self)
         self.outer_layout.setContentsMargins(4, 3, 4, 3)
         self.outer_layout.setSpacing(6)
 
-        self.bubble_frame = QFrame(self)
+        # Khung chồng 2 lớp (QGridLayout cell 0,0) để nút mặt cười nằm đè đúng góc dưới phải của bong bóng
+        self.bubble_stack = QWidget(self)
+        self.bubble_grid = QGridLayout(self.bubble_stack)
+        self.bubble_grid.setContentsMargins(0, 0, 0, 0)
+        self.bubble_grid.setSpacing(0)
+
+        self.bubble_pad = QWidget(self.bubble_stack)
+        self.bubble_pad_layout = QVBoxLayout(self.bubble_pad)
+        self.bubble_pad_layout.setContentsMargins(0, 0, 4, 11)
+        self.bubble_pad_layout.setSpacing(0)
+
+        self.bubble_frame = QFrame(self.bubble_pad)
         self.bubble_frame.setMaximumWidth(480)
+        self.bubble_frame.setMinimumWidth(110)
         self.bubble_layout = QVBoxLayout(self.bubble_frame)
-        self.bubble_layout.setContentsMargins(14, 10, 14, 8)
-        self.bubble_layout.setSpacing(4)
+        self.bubble_layout.setContentsMargins(14, 10, 14, 12)
+        self.bubble_layout.setSpacing(5)
+
+        # Khung trích dẫn tin nhắn được nhắc lại (Reply Quote Box)
+        self.quote_frame = QFrame(self.bubble_frame)
+        self.quote_frame.setVisible(False)
+        quote_layout = QVBoxLayout(self.quote_frame)
+        quote_layout.setContentsMargins(8, 5, 8, 5)
+        quote_layout.setSpacing(2)
+        self.quote_title_label = QLabel("\u275d Reply", self.quote_frame)
+        self.quote_body_label = QLabel(self.quote_frame)
+        self.quote_body_label.setWordWrap(True)
+        quote_layout.addWidget(self.quote_title_label)
+        quote_layout.addWidget(self.quote_body_label)
+        self.bubble_layout.addWidget(self.quote_frame)
 
         self.content_label = QLabel(self.bubble_frame)
         self.content_label.setWordWrap(True)
@@ -544,9 +820,57 @@ class ChatBubbleWidget(QFrame):
         self.content_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.bubble_layout.addWidget(self.content_label)
 
+        self.download_btn = QPushButton("\u2b07  Tải về", self.bubble_frame)
+        self.download_btn.setObjectName("fileDownloadBtn")
+        self.download_btn.setCursor(Qt.PointingHandCursor)
+        self.download_btn.setVisible(False)
+        self.download_btn.clicked.connect(self._on_download_clicked)
+        self.bubble_layout.addWidget(self.download_btn, 0, Qt.AlignLeft)
+
         self.time_label = QLabel(self.bubble_frame)
-        self.time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.time_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.bubble_layout.addWidget(self.time_label)
+
+        self.bubble_pad_layout.addWidget(self.bubble_frame)
+        self.bubble_grid.addWidget(self.bubble_pad, 0, 0)
+
+        # Cụm nút mặt cười + huy hiệu cảm xúc đè ở góc dưới cùng bên phải của bong bóng
+        self.corner_react_bar = QWidget(self.bubble_stack)
+        self.corner_react_layout = QHBoxLayout(self.corner_react_bar)
+        self.corner_react_layout.setContentsMargins(0, 0, 8, 0)
+        self.corner_react_layout.setSpacing(4)
+
+        self.reaction_badge = QLabel(self.corner_react_bar)
+        self.reaction_badge.setObjectName("reactionBadge")
+        self.reaction_badge.setVisible(False)
+        self.corner_react_layout.addWidget(self.reaction_badge, 0, Qt.AlignVCenter)
+
+        self.react_btn = QPushButton("", self.corner_react_bar)
+        self.react_btn.setObjectName("bubbleCornerReactBtn")
+        self.react_btn.setCursor(Qt.PointingHandCursor)
+        self.react_btn.setToolTip("Thả cảm xúc vào tin nhắn")
+        self.react_btn.clicked.connect(self._show_reaction_picker)
+        self.corner_react_layout.addWidget(self.react_btn, 0, Qt.AlignVCenter)
+
+        self.bubble_grid.addWidget(
+            self.corner_react_bar,
+            0,
+            0,
+            Qt.AlignBottom | Qt.AlignRight,
+        )
+
+        # 3 nút tròn thao tác bên cạnh bong bóng: Nhắc lại (❝), Chuyển tiếp (➦), Tùy chọn (⋯)
+        self.reply_btn = QPushButton("\u275d", self)
+        self.reply_btn.setObjectName("bubbleActionBtn")
+        self.reply_btn.setCursor(Qt.PointingHandCursor)
+        self.reply_btn.setToolTip("Nhắc lại tin nhắn (Reply)")
+        self.reply_btn.clicked.connect(self._trigger_reply)
+
+        self.forward_btn = QPushButton("\u27a6", self)
+        self.forward_btn.setObjectName("bubbleActionBtn")
+        self.forward_btn.setCursor(Qt.PointingHandCursor)
+        self.forward_btn.setToolTip("Chuyển tiếp tin nhắn (Forward)")
+        self.forward_btn.clicked.connect(self._trigger_forward)
 
         self.menu_btn = QPushButton("\u22ef", self)
         self.menu_btn.setObjectName("bubbleMenuBtn")
@@ -556,26 +880,36 @@ class ChatBubbleWidget(QFrame):
 
         if is_self:
             self.outer_layout.addStretch(1)
+            self.outer_layout.addWidget(self.reply_btn, 0, Qt.AlignVCenter)
+            self.outer_layout.addWidget(self.forward_btn, 0, Qt.AlignVCenter)
             self.outer_layout.addWidget(self.menu_btn, 0, Qt.AlignVCenter)
-            self.outer_layout.addWidget(self.bubble_frame, 0)
+            self.outer_layout.addWidget(self.bubble_stack, 0)
         else:
-            self.outer_layout.addWidget(self.bubble_frame, 0)
+            self.outer_layout.addWidget(self.bubble_stack, 0)
+            self.outer_layout.addWidget(self.reply_btn, 0, Qt.AlignVCenter)
+            self.outer_layout.addWidget(self.forward_btn, 0, Qt.AlignVCenter)
             self.outer_layout.addWidget(self.menu_btn, 0, Qt.AlignVCenter)
             self.outer_layout.addStretch(1)
 
         self.refresh_appearance()
 
     def refresh_appearance(self) -> None:
-        """Cập nhật giao diện bong bóng (bình thường hoặc đã bị thu hồi như Messenger)."""
+        """Cập nhật giao diện bong bóng (trích dẫn reply, thẻ file, cảm xúc góc dưới phải hoặc thu hồi)."""
         timestamp = time.strftime("%H:%M:%S", time.localtime(self.message.timestamp))
-        sender_escaped = html.escape(self.message.sender_name)
+        reply_quote = getattr(self.message, "reply_to_text", "") or ""
 
         if self.message.is_recalled:
             self.bubble_frame.setObjectName("bubbleRecalled")
+            self.quote_frame.setVisible(False)
+            self.download_btn.setVisible(False)
+            self.react_btn.setVisible(False)
+            self.reaction_badge.setVisible(False)
+            self.reply_btn.setVisible(False)
+            self.forward_btn.setVisible(False)
             recalled_text = (
                 "Bạn đã thu hồi một tin nhắn"
                 if self.is_self
-                else f"{sender_escaped} đã thu hồi một tin nhắn"
+                else "Tin nhắn đã được thu hồi"
             )
             self.content_label.setText(
                 f'<span style="color:#8c97ac; font-style:italic; font-size:13px;">'
@@ -583,27 +917,172 @@ class ChatBubbleWidget(QFrame):
             )
             self.time_label.setText(timestamp)
             self.time_label.setStyleSheet("color: #a1a1bc; font-size: 10px;")
-        elif self.is_self:
-            self.bubble_frame.setObjectName("bubbleSelf")
-            escaped_body = MainWindow._escape_multiline(self.message.content)
-            self.content_label.setText(
-                f'<b style="color:#d5e6fb; font-size:11px;">[{sender_escaped}]</b> '
-                f'<span style="color:#ffffff; font-size:13px; line-height:18px;">{escaped_body}</span>'
-            )
-            self.time_label.setText(timestamp)
-            self.time_label.setStyleSheet("color: #d5e6fb; font-size: 10px;")
         else:
-            self.bubble_frame.setObjectName("bubblePeer")
-            escaped_body = MainWindow._escape_multiline(self.message.content)
-            self.content_label.setText(
-                f'<b style="color:{PEER_COLOR}; font-size:12px;">[{sender_escaped}]</b> '
-                f'<span style="color:{TEXT_COLOR}; font-size:13px; line-height:18px;">{escaped_body}</span>'
-            )
-            self.time_label.setText(timestamp)
-            self.time_label.setStyleSheet(f"color: {PLACEHOLDER_COLOR}; font-size: 10px;")
+            self.react_btn.setVisible(True)
+            self.reply_btn.setVisible(True)
+            self.forward_btn.setVisible(True)
+
+            if reply_quote:
+                self.quote_frame.setObjectName("quoteSelf" if self.is_self else "quotePeer")
+                title_col = "#ffffff" if self.is_self else "#2f80ed"
+                body_col = "#eaf2fd" if self.is_self else "#4f5e7b"
+                self.quote_title_label.setStyleSheet(f"color: {title_col}; font-size: 11px; font-weight: 700;")
+                self.quote_body_label.setStyleSheet(f"color: {body_col}; font-size: 12px;")
+                self.quote_body_label.setText(reply_quote)
+                self.quote_frame.setVisible(True)
+                self.quote_frame.style().unpolish(self.quote_frame)
+                self.quote_frame.style().polish(self.quote_frame)
+            else:
+                self.quote_frame.setVisible(False)
+
+            if getattr(self.message, "is_file", False):
+                fname = html.escape(self.message.file_name or self.message.content)
+                fsize = format_size(getattr(self.message, "file_size", 0))
+                if self.is_self:
+                    self.bubble_frame.setObjectName("bubbleSelf")
+                    self.download_btn.setVisible(False)
+                    self.content_label.setText(
+                        f'<div style="color:#ffffff; font-size:13px; font-weight:700;">\U0001f4c4 {fname}</div>'
+                        f'<div style="color:#d5e6fb; font-size:11px; margin-top:2px;">Dung lượng: {fsize} \u2022 Đã gửi tệp</div>'
+                    )
+                    self.time_label.setText(timestamp)
+                    self.time_label.setStyleSheet("color: #d5e6fb; font-size: 10px;")
+                else:
+                    self.bubble_frame.setObjectName("bubblePeer")
+                    self.download_btn.setVisible(True)
+                    self.content_label.setText(
+                        f'<div style="color:{TEXT_COLOR}; font-size:13px; font-weight:700;">\U0001f4c4 {fname}</div>'
+                        f'<div style="color:{TEXT_SECONDARY}; font-size:11px; margin-top:2px;">Dung lượng: {fsize}</div>'
+                    )
+                    self.time_label.setText(timestamp)
+                    self.time_label.setStyleSheet(f"color: {PLACEHOLDER_COLOR}; font-size: 10px;")
+            elif self.is_self:
+                self.bubble_frame.setObjectName("bubbleSelf")
+                self.download_btn.setVisible(False)
+                escaped_body = MainWindow._escape_multiline(self.message.content)
+                self.content_label.setText(
+                    f'<span style="color:#ffffff; font-size:13px; line-height:18px;">{escaped_body}</span>'
+                )
+                self.time_label.setText(timestamp)
+                self.time_label.setStyleSheet("color: #d5e6fb; font-size: 10px;")
+            else:
+                self.bubble_frame.setObjectName("bubblePeer")
+                self.download_btn.setVisible(False)
+                escaped_body = MainWindow._escape_multiline(self.message.content)
+                self.content_label.setText(
+                    f'<span style="color:{TEXT_COLOR}; font-size:13px; line-height:18px;">{escaped_body}</span>'
+                )
+                self.time_label.setText(timestamp)
+                self.time_label.setStyleSheet(f"color: {PLACEHOLDER_COLOR}; font-size: 10px;")
+
+            # Cập nhật nút mặt cười ở góc dưới phải bong bóng:
+            # Khi đã thả cảm xúc, hình cảm xúc đè trực tiếp lên nút mặt cười + hiện huy hiệu đếm bên cạnh
+            reactions = getattr(self.message, "reactions", {}) or {}
+            emojis = [e for e in reactions.values() if e]
+            if emojis:
+                my_react = reactions.get(SELF_SENDER_ID, "")
+                top_emoji = my_react or emojis[-1]
+                self.react_btn.setIcon(QIcon())
+                self.react_btn.setText(top_emoji)
+                unique_emojis = list(dict.fromkeys(emojis))
+                self.reaction_badge.setText(f"{' '.join(unique_emojis)} {len(emojis)}")
+                self.reaction_badge.setVisible(True)
+            else:
+                self.react_btn.setText("")
+                self.react_btn.setIcon(QIcon(_load_svg_pixmap("icon_emoji.svg", 14, 14)))
+                self.react_btn.setIconSize(QSize(14, 14))
+                self.reaction_badge.setVisible(False)
 
         self.bubble_frame.style().unpolish(self.bubble_frame)
         self.bubble_frame.style().polish(self.bubble_frame)
+
+    @Slot()
+    def _trigger_reply(self) -> None:
+        if not self.message.is_recalled and self._on_reply_message is not None:
+            self._on_reply_message(self.message)
+
+    @Slot()
+    def _trigger_forward(self) -> None:
+        if not self.message.is_recalled and self._on_forward_message is not None:
+            self._on_forward_message(self.message)
+
+    @Slot()
+    def _show_reaction_picker(self) -> None:
+        """Hiển thị thanh 6 cảm xúc nhanh (❤️ 😆 😮 😢 😡 👍) ngay phía trên nút mặt cười."""
+        if self.message.is_recalled:
+            return
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: #ffffff; border: 1px solid #cfe0fa; border-radius: 20px; padding: 4px 6px; }"
+        )
+        bar = QWidget(menu)
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(4, 2, 4, 2)
+        row.setSpacing(4)
+
+        current_my_react = (getattr(self.message, "reactions", {}) or {}).get(SELF_SENDER_ID, "")
+        for emoji_char in REACTION_EMOJIS:
+            btn = QPushButton(emoji_char, bar)
+            btn.setFixedSize(34, 34)
+            btn.setCursor(Qt.PointingHandCursor)
+            is_selected = emoji_char == current_my_react
+            bg = "#eaf2fd" if is_selected else "transparent"
+            border = "1px solid #2f80ed" if is_selected else "1px solid transparent"
+            btn.setStyleSheet(
+                f"QPushButton {{ background: {bg}; border: {border}; border-radius: 17px; font-size: 18px; padding: 0; }}"
+                "QPushButton:hover { background: #eaf2fd; border: 1px solid #9ec5fa; }"
+                "QPushButton:pressed { background: #d5e6fb; padding-top: 2px; }"
+            )
+            btn.clicked.connect(
+                lambda _checked=False, e=emoji_char, m=menu: self._pick_reaction(e, m)
+            )
+            row.addWidget(btn)
+
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(bar)
+        menu.addAction(action)
+
+        hint_w = bar.sizeHint().width() + 12
+        hint_h = bar.sizeHint().height() + 12
+        pos = self.react_btn.mapToGlobal(QPoint((self.react_btn.width() - hint_w) // 2, -hint_h - 4))
+        menu.exec(pos)
+
+    def _pick_reaction(self, emoji_char: str, menu: QMenu) -> None:
+        menu.close()
+        if self._on_react_message is not None:
+            self._on_react_message(self.message, emoji_char)
+
+    @Slot()
+    def _on_download_clicked(self) -> None:
+        """Mở hộp thoại cho phép người dùng chủ động chọn nơi tải file về máy tính."""
+        src_path = getattr(self.message, "file_path", "")
+        fname = getattr(self.message, "file_name", "") or self.message.content or "downloaded_file"
+        default_dir = os.path.abspath("downloads")
+        os.makedirs(default_dir, exist_ok=True)
+        default_target = os.path.join(default_dir, os.path.basename(fname))
+
+        dest_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Tải file về máy tính",
+            default_target,
+            "All Files (*)",
+        )
+        if not dest_path:
+            return
+        try:
+            if src_path and os.path.isfile(src_path):
+                if os.path.abspath(src_path) != os.path.abspath(dest_path):
+                    shutil.copy2(src_path, dest_path)
+            else:
+                with open(dest_path, "wb") as f:
+                    f.write(b"")
+            self.download_btn.setText("\u2713  Đã tải về")
+            self.download_btn.setObjectName("fileDownloadBtnDone")
+            self.download_btn.setToolTip(f"Đã lưu tại: {dest_path}")
+            self.download_btn.style().unpolish(self.download_btn)
+            self.download_btn.style().polish(self.download_btn)
+        except OSError:
+            pass
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:  # noqa: N802
         self._open_menu_at(event.globalPos())
@@ -616,6 +1095,16 @@ class ChatBubbleWidget(QFrame):
 
     def _open_menu_at(self, global_pos: QPoint) -> None:
         menu = QMenu(self)
+        if not self.message.is_recalled:
+            reply_action = QAction("\u275d  Nhắc lại tin nhắn (Reply)", menu)
+            reply_action.triggered.connect(self._trigger_reply)
+            menu.addAction(reply_action)
+
+            forward_action = QAction("\u27a6  Chuyển tiếp tin nhắn (Forward)...", menu)
+            forward_action.triggered.connect(self._trigger_forward)
+            menu.addAction(forward_action)
+            menu.addSeparator()
+
         if self.is_self and not self.message.is_recalled:
             recall_action = QAction("\u21a9\ufe0f  Thu hồi tin nhắn (với mọi người)", menu)
             recall_action.triggered.connect(lambda: self._on_recall_message(self.message))
@@ -627,14 +1116,128 @@ class ChatBubbleWidget(QFrame):
         menu.exec(global_pos)
 
 
+class ForwardMessageDialog(QDialog):
+    """
+    Hộp thoại 'Chuyển tiếp tin nhắn' cho phép tìm kiếm và chọn 1 hoặc nhiều người nhận
+    đang online để chuyển tiếp nhanh tin nhắn văn bản hoặc tệp đính kèm.
+    """
+
+    def __init__(
+        self,
+        message: ChatMessage,
+        peers: List[PeerInfo],
+        on_forward: Callable[[ChatMessage, List[PeerInfo]], None],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.message = message
+        self.peers = list(peers)
+        self._on_forward = on_forward
+        self._checkboxes: List[Tuple[PeerInfo, QCheckBox]] = []
+
+        self.setWindowTitle("Chuyển tiếp tin nhắn")
+        self.setMinimumSize(400, 420)
+        self.setStyleSheet(
+            "QDialog { background: #ffffff; color: #1b1a57; }"
+            "QLabel { color: #1b1a57; }"
+            "QCheckBox { color: #1b1a57; font-size: 13px; padding: 6px 8px; spacing: 8px; }"
+            "QCheckBox:hover { background: #f2f7fe; border-radius: 8px; }"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("\u27a6 Chuyển tiếp tin nhắn tới bạn bè")
+        title.setStyleSheet("font-size: 15px; font-weight: 700; color: #1b1a57;")
+        layout.addWidget(title)
+
+        preview_box = QFrame(self)
+        preview_box.setStyleSheet(
+            "QFrame { background: #f5f8ff; border: 1px solid #dce6f7; border-left: 3px solid #2f80ed; border-radius: 8px; }"
+        )
+        p_layout = QVBoxLayout(preview_box)
+        p_layout.setContentsMargins(10, 8, 10, 8)
+        preview_str = (
+            f"\U0001f4c4 Tệp: {message.file_name or message.content}"
+            if getattr(message, "is_file", False)
+            else message.content
+        )
+        preview_lbl = QLabel(preview_str, preview_box)
+        preview_lbl.setWordWrap(True)
+        preview_lbl.setStyleSheet("color: #4f5e7b; font-size: 12px; border: none;")
+        p_layout.addWidget(preview_lbl)
+        layout.addWidget(preview_box)
+
+        self.search_edit = QLineEdit(self)
+        self.search_edit.setObjectName("searchInput")
+        self.search_edit.setPlaceholderText("Tìm người nhận theo tên hoặc IP...")
+        self.search_edit.textChanged.connect(self._filter_peers)
+        layout.addWidget(self.search_edit)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: 1px solid #e6ecf5; border-radius: 10px; background: #fbfcfe; }")
+        list_container = QWidget(scroll)
+        self.list_layout = QVBoxLayout(list_container)
+        self.list_layout.setContentsMargins(8, 8, 8, 8)
+        self.list_layout.setSpacing(4)
+
+        if not self.peers:
+            empty_lbl = QLabel("Hiện chưa có người dùng nào khác đang online.", list_container)
+            empty_lbl.setStyleSheet("color: #8c97ac; font-size: 12px; padding: 12px;")
+            self.list_layout.addWidget(empty_lbl)
+        else:
+            for peer in self.peers:
+                cb = QCheckBox(f"{peer.name}  ({peer.ip}:{peer.tcp_port})  \u2022  {peer.status}", list_container)
+                cb.setCursor(Qt.PointingHandCursor)
+                self.list_layout.addWidget(cb)
+                self._checkboxes.append((peer, cb))
+        self.list_layout.addStretch(1)
+        scroll.setWidget(list_container)
+        layout.addWidget(scroll, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        cancel_btn = QPushButton("Hủy", self)
+        cancel_btn.setObjectName("leaveButton")
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        self.send_forward_btn = QPushButton("\u27a6 Chuyển tiếp", self)
+        self.send_forward_btn.setCursor(Qt.PointingHandCursor)
+        self.send_forward_btn.setEnabled(bool(self.peers))
+        self.send_forward_btn.clicked.connect(self._confirm_forward)
+        btn_row.addWidget(self.send_forward_btn)
+        layout.addLayout(btn_row)
+
+    def _filter_peers(self, text: str) -> None:
+        q = (text or "").strip().lower()
+        for peer, cb in self._checkboxes:
+            haystack = f"{peer.name} {peer.ip}:{peer.tcp_port} {peer.status}".lower()
+            cb.setVisible(not q or q in haystack)
+
+    def _confirm_forward(self) -> None:
+        selected = [peer for peer, cb in self._checkboxes if cb.isChecked()]
+        if not selected:
+            return
+        self._on_forward(self.message, selected)
+        self.accept()
+
+
 class HistoryLineEdit(QLineEdit):
-    """Ô nhập liệu có lịch sử lệnh: phím Up/Down để gọi lại các dòng đã gõ (giống terminal)."""
+    """
+    Ô nhập liệu có lịch sử lệnh (Up/Down) và hỗ trợ điều hướng bảng đề xuất lệnh '/'
+    ngay phía trên ô nhập.
+    """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._history: List[str] = []
         self._cursor = 0
         self._draft = ""
+        self.popup_key_handler: Optional[Callable[[int], bool]] = None
 
     def remember(self, text: str) -> None:
         if text and (not self._history or self._history[-1] != text):
@@ -644,6 +1247,15 @@ class HistoryLineEdit(QLineEdit):
         self._draft = ""
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - tên hàm của Qt
+        if self.popup_key_handler is not None and event.key() in (
+            Qt.Key_Up,
+            Qt.Key_Down,
+            Qt.Key_Tab,
+            Qt.Key_Escape,
+        ):
+            if self.popup_key_handler(event.key()):
+                event.accept()
+                return
         if event.key() == Qt.Key_Up and self._history:
             if self._cursor == len(self._history):
                 self._draft = self.text()
@@ -776,6 +1388,14 @@ class MainWindow(QMainWindow):
         self.chat_avatar_label: QLabel
         self.channel_bar: QWidget
         self.channel_tag_label: QLabel
+        self.cmd_popup: QFrame
+        self.cmd_list: QListWidget
+        self.reply_bar: QFrame
+        self.reply_text_label: QLabel
+        self.reply_close_btn: QPushButton
+        self._replying_to_message: Optional[ChatMessage] = None
+        self._active_animations: List[QPropertyAnimation] = []
+        self._cmd_popup_navigated: bool = False
 
         # Trạng thái riêng của giao diện (chỉ truy cập từ Main Thread)
         self._active_peer_id: Optional[str] = None
@@ -810,7 +1430,8 @@ class MainWindow(QMainWindow):
         self.resize(1060, 680)
         self.setMinimumSize(760, 480)
         self._apply_light_palette()
-        self.setStyleSheet(STYLESHEET)
+        chevron_url = _asset_path("icon_chevron.svg").replace("\\", "/")
+        self.setStyleSheet(STYLESHEET.replace("__CHEVRON_ICON_PATH__", chevron_url))
 
         base_font = QFont("Plus Jakarta Sans", 10)
         if not base_font.exactMatch():
@@ -846,7 +1467,7 @@ class MainWindow(QMainWindow):
 
         self.my_avatar_label = ClickableAvatarLabel()
         self.my_avatar_label.setFixedSize(44, 44)
-        self.my_avatar_label.setToolTip("Click để đổi Avatar của bạn (chọn ảnh từ máy hoặc mẫu Figma)")
+        self.my_avatar_label.setToolTip("Click để đổi Avatar của bạn (Chọn ảnh từ thiết bị)")
         self._refresh_my_avatar()
         profile_layout.addWidget(self.my_avatar_label, 0, Qt.AlignVCenter)
 
@@ -855,15 +1476,17 @@ class MainWindow(QMainWindow):
         my_info_box.setSpacing(2)
         self.my_name_label = QLabel(my_name)
         self.my_name_label.setObjectName("myNameLabel")
-        port_label = QLabel(f"TCP:{my_port} \u2022 Đổi avatar")
-        port_label.setObjectName("myPortLabel")
+        self.my_name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         my_info_box.addWidget(self.my_name_label)
-        my_info_box.addWidget(port_label)
         profile_layout.addLayout(my_info_box, 1)
 
         self.status_combo = QComboBox()
-        self.status_combo.addItem("\u25cf online", "online")
-        self.status_combo.addItem("\u25cf away", "away")
+        self.status_combo.setObjectName("statusCombo")
+        self.status_combo.setCursor(Qt.PointingHandCursor)
+        self.status_combo.setMinimumWidth(98)
+        self.status_combo.setIconSize(QSize(10, 10))
+        self.status_combo.addItem(QIcon(_load_svg_pixmap("status_online.svg", 10, 10)), "online", "online")
+        self.status_combo.addItem(QIcon(_load_svg_pixmap("status_away.svg", 10, 10)), "away", "away")
         self.status_combo.setToolTip("Your presence status (same as /status <online|away>)")
         self._set_combo_status(my_status)
         profile_layout.addWidget(self.status_combo, 0, Qt.AlignVCenter)
@@ -948,8 +1571,9 @@ class MainWindow(QMainWindow):
         header_text.addWidget(self.chat_sub_label)
         header_layout.addLayout(header_text, 1)
 
-        self.leave_btn = QPushButton(" Leave (/leave)")
+        self.leave_btn = QPushButton(" Leave")
         self.leave_btn.setObjectName("leaveButton")
+        self.leave_btn.setCursor(Qt.PointingHandCursor)
         self.leave_btn.setIcon(QIcon(_load_svg_pixmap("icon_leave.svg", 16, 16)))
         self.leave_btn.setIconSize(QSize(16, 16))
         self.leave_btn.setToolTip("Close the current chat")
@@ -998,6 +1622,39 @@ class MainWindow(QMainWindow):
         channel_layout.addWidget(self.file_progress_bar, 1, Qt.AlignVCenter)
 
         right_layout.addWidget(self.channel_bar)
+
+        # 3b. Thanh Nhắc lại tin nhắn ("❝ Reply" + nội dung trích dẫn + nút ✕ đóng) ngay phía trên ô nhập
+        self.reply_bar = QFrame()
+        self.reply_bar.setObjectName("replyPreviewBar")
+        self.reply_bar.setVisible(False)
+        reply_bar_layout = QHBoxLayout(self.reply_bar)
+        reply_bar_layout.setContentsMargins(16, 8, 16, 8)
+        reply_bar_layout.setSpacing(10)
+
+        reply_accent = QFrame(self.reply_bar)
+        reply_accent.setObjectName("replyAccentLine")
+        reply_bar_layout.addWidget(reply_accent)
+
+        reply_text_col = QVBoxLayout()
+        reply_text_col.setContentsMargins(0, 0, 0, 0)
+        reply_text_col.setSpacing(2)
+        reply_header_lbl = QLabel("\u275d Reply", self.reply_bar)
+        reply_header_lbl.setStyleSheet("color: #2f80ed; font-size: 12px; font-weight: 700;")
+        self.reply_text_label = QLabel("", self.reply_bar)
+        self.reply_text_label.setStyleSheet("color: #4f5e7b; font-size: 12px;")
+        self.reply_text_label.setWordWrap(True)
+        reply_text_col.addWidget(reply_header_lbl)
+        reply_text_col.addWidget(self.reply_text_label)
+        reply_bar_layout.addLayout(reply_text_col, 1)
+
+        self.reply_close_btn = QPushButton("\u2715", self.reply_bar)
+        self.reply_close_btn.setObjectName("replyCloseBtn")
+        self.reply_close_btn.setCursor(Qt.PointingHandCursor)
+        self.reply_close_btn.setToolTip("Hủy nhắc lại tin nhắn")
+        self.reply_close_btn.clicked.connect(self._cancel_reply_bar)
+        reply_bar_layout.addWidget(self.reply_close_btn, 0, Qt.AlignVCenter)
+
+        right_layout.addWidget(self.reply_bar)
 
         # 4. Thanh nhập tin nhắn (Nút Emoji mở bảng chọn + Ô nhập nhấn Enter để gửi + Nút đính kèm file)
         # Đã bỏ nút tròn Micro ở góc dưới phải theo yêu cầu.
@@ -1048,6 +1705,33 @@ class MainWindow(QMainWindow):
         input_palette.setColor(QPalette.Text, QColor(TEXT_COLOR))
         input_palette.setColor(QPalette.PlaceholderText, QColor(PLACEHOLDER_COLOR))
         self.message_input.setPalette(input_palette)
+        self.message_input.installEventFilter(self)
+        self.search_input.installEventFilter(self)
+
+        # 5. Bảng đề xuất lệnh nhanh (Slash Command Suggestion Popup) nổi ngay phía trên ô nhập
+        self.cmd_popup = QFrame(self)
+        self.cmd_popup.setObjectName("cmdSuggestPopup")
+        self.cmd_popup.setVisible(False)
+        popup_shadow = QGraphicsDropShadowEffect(self.cmd_popup)
+        popup_shadow.setBlurRadius(22)
+        popup_shadow.setOffset(0, 4)
+        popup_shadow.setColor(QColor(27, 26, 87, 45))
+        self.cmd_popup.setGraphicsEffect(popup_shadow)
+
+        popup_layout = QVBoxLayout(self.cmd_popup)
+        popup_layout.setContentsMargins(6, 6, 6, 6)
+        popup_layout.setSpacing(2)
+        popup_header = QLabel("\u26a1 GỢI Ý LỆNH NHANH (\u2191\u2193 chọn \u2022 Tab điền \u2022 Enter/Click thực thi)", self.cmd_popup)
+        popup_header.setObjectName("cmdSuggestHeader")
+        popup_layout.addWidget(popup_header)
+
+        self.cmd_list = QListWidget(self.cmd_popup)
+        self.cmd_list.setObjectName("cmdSuggestList")
+        self.cmd_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.cmd_list.setCursor(Qt.PointingHandCursor)
+        self.cmd_list.setFocusPolicy(Qt.NoFocus)
+        popup_layout.addWidget(self.cmd_list)
+
         self.message_input.setFocus()
 
     def _connect_signals(self) -> None:
@@ -1060,6 +1744,9 @@ class MainWindow(QMainWindow):
         self.signals.my_status_changed.connect(self.on_my_status_changed)
 
         self.message_input.returnPressed.connect(self._on_submit_input)
+        self.message_input.textChanged.connect(self._on_message_input_text_changed)
+        self.message_input.popup_key_handler = self._handle_cmd_popup_key
+        self.cmd_list.itemClicked.connect(self._on_cmd_suggest_item_clicked)
         self.send_btn.clicked.connect(self._on_submit_input)
         self.send_file_btn.clicked.connect(self._on_send_file_clicked)
         self.emoji_btn.clicked.connect(self._on_emoji_clicked)
@@ -1087,18 +1774,11 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_change_avatar_clicked(self) -> None:
-        """Mở menu chọn ảnh từ máy tính hoặc chọn nhanh 1 trong 5 mẫu Avatar Figma."""
+        """Mở menu chọn ảnh từ thiết bị để đổi Avatar."""
         menu = QMenu(self)
-        pick_file_action = QAction("\U0001f4c1  Chọn ảnh bất kỳ từ máy tính...", menu)
+        pick_file_action = QAction("\U0001f4c1  Chọn ảnh từ thiết bị", menu)
         pick_file_action.triggered.connect(self._pick_custom_avatar_file)
         menu.addAction(pick_file_action)
-        menu.addSeparator()
-
-        for idx, filename in enumerate(AVATAR_FILES):
-            icon_pix = _build_avatar_pixmap(f"A{idx+1}", size=28, status=None, avatar_index=idx)
-            preset_action = QAction(QIcon(icon_pix), f"Mẫu Avatar Figma #{idx + 1}", menu)
-            preset_action.triggered.connect(lambda _checked=False, i=idx: self._set_preset_avatar(i))
-            menu.addAction(preset_action)
 
         pos = self.my_avatar_label.mapToGlobal(QPoint(0, self.my_avatar_label.height() + 4))
         menu.exec(pos)
@@ -1209,6 +1889,256 @@ class MainWindow(QMainWindow):
         self.on_system_notification("[*] Bạn đã thu hồi một tin nhắn.")
         self.message_input.setFocus()
 
+    def _react_to_message(self, message: ChatMessage, emoji_char: str) -> None:
+        """
+        Thả hoặc gỡ cảm xúc (❤️ 😆 😮 😢 😡 👍) trên một tin nhắn và đồng bộ 2 chiều qua TCP:
+        - Nếu bấm lại đúng cảm xúc mình đã thả thì gỡ cảm xúc đó.
+        - Gửi khung điều khiển `__LANCHAT_REACT__|<nội dung>|<emoji>` sang máy đối phương.
+        """
+        if message.is_recalled:
+            return
+        if not hasattr(message, "reactions") or message.reactions is None:
+            message.reactions = {}
+
+        current = message.reactions.get(SELF_SENDER_ID, "")
+        new_emoji = "" if current == emoji_char else emoji_char
+        if new_emoji:
+            message.reactions[SELF_SENDER_ID] = new_emoji
+        else:
+            message.reactions.pop(SELF_SENDER_ID, None)
+
+        widget = self._bubble_widgets.get(id(message))
+        if widget is not None:
+            widget.refresh_appearance()
+
+        if self._active_peer_id:
+            try:
+                self.command_parser.tcp_manager.send_text_message(
+                    self._active_peer_id,
+                    f"{REACT_PREFIX}{message.content}|{new_emoji}",
+                )
+            except Exception:
+                pass
+        self.message_input.setFocus()
+
+    def _start_reply_to_message(self, message: ChatMessage) -> None:
+        """Hiển thị thanh '❝ Reply' kèm nội dung tin nhắn được trích dẫn ngay phía trên ô nhập."""
+        if message.is_recalled:
+            return
+        self._replying_to_message = message
+        raw_quote = (
+            f"\U0001f4c4 {message.file_name or message.content}"
+            if getattr(message, "is_file", False)
+            else message.content
+        )
+        one_line = " ".join((raw_quote or "").splitlines()).strip()
+        if len(one_line) > 120:
+            one_line = one_line[:117] + "..."
+        self.reply_text_label.setText(one_line)
+        if not self.reply_bar.isVisible():
+            self.reply_bar.setVisible(True)
+            self._animate_fade_in(self.reply_bar, duration_ms=150)
+        self.message_input.setFocus()
+
+    @Slot()
+    def _cancel_reply_bar(self) -> None:
+        self._replying_to_message = None
+        if hasattr(self, "reply_bar"):
+            self.reply_bar.setVisible(False)
+        self.message_input.setFocus()
+
+    def _open_forward_dialog(self, message: ChatMessage) -> None:
+        """Mở hộp thoại chọn 1 hoặc nhiều người nhận đang online để chuyển tiếp tin nhắn/tệp."""
+        if message.is_recalled:
+            return
+        peers = self.shared_state.get_online_peers()
+        dlg = ForwardMessageDialog(
+            message=message,
+            peers=peers,
+            on_forward=self._forward_message_to_peers,
+            parent=self,
+        )
+        dlg.exec()
+        self.message_input.setFocus()
+
+    def _forward_message_to_peers(self, message: ChatMessage, target_peers: List[PeerInfo]) -> int:
+        """
+        Chuyển tiếp `message` (văn bản hoặc tệp) tới danh sách `target_peers` qua TCP.
+        Trả về số người nhận đã được chuyển tiếp thành công.
+        """
+        if message.is_recalled or not target_peers:
+            return 0
+        my_name, _, _ = self.shared_state.get_my_info()
+        forwarded_count = 0
+
+        for peer in target_peers:
+            if not self.command_parser.tcp_manager.connect_to_peer(peer):
+                continue
+
+            if getattr(message, "is_file", False) and getattr(message, "file_path", "") and os.path.isfile(message.file_path):
+                src_path = message.file_path
+                fname = message.file_name or os.path.basename(src_path)
+                fsize = getattr(message, "file_size", 0) or os.path.getsize(src_path)
+                self.command_parser.tcp_manager.send_file_async(peer.peer_id, src_path)
+                fwd_msg = ChatMessage(
+                    sender_name=my_name,
+                    sender_id=SELF_SENDER_ID,
+                    content=fname,
+                    is_file=True,
+                    file_name=fname,
+                    file_size=fsize,
+                    file_path=src_path,
+                )
+                self.shared_state.append_message(peer.peer_id, fwd_msg)
+                self.signals.chat_message_received.emit(peer.peer_id, fwd_msg)
+                forwarded_count += 1
+            else:
+                text_to_send = message.content
+                if self.command_parser.tcp_manager.send_text_message(peer.peer_id, text_to_send):
+                    fwd_msg = ChatMessage(
+                        sender_name=my_name,
+                        sender_id=SELF_SENDER_ID,
+                        content=text_to_send,
+                    )
+                    self.shared_state.append_message(peer.peer_id, fwd_msg)
+                    self.signals.chat_message_received.emit(peer.peer_id, fwd_msg)
+                    forwarded_count += 1
+
+        self.on_peer_list_updated()
+        return forwarded_count
+
+    # ------------------------------------------------------------------
+    # Bảng đề xuất lệnh '/' (Slash Command Autocomplete) & Hiệu ứng
+    # ------------------------------------------------------------------
+
+    @Slot(str)
+    def _on_message_input_text_changed(self, text: str) -> None:
+        if not text.startswith("/"):
+            self.cmd_popup.setVisible(False)
+            self._cmd_popup_navigated = False
+            return
+
+        query = text.lower()
+        matches = [
+            (cmd, desc, auto_exec)
+            for cmd, desc, auto_exec in SLASH_COMMANDS
+            if cmd.lower().startswith(query)
+        ]
+        if not matches:
+            self.cmd_popup.setVisible(False)
+            self._cmd_popup_navigated = False
+            return
+
+        self.cmd_list.clear()
+        for cmd, desc, auto_exec in matches:
+            item = QListWidgetItem(f"{cmd.strip()}   \u2014   {desc}")
+            item.setData(Qt.UserRole, (cmd, auto_exec))
+            self.cmd_list.addItem(item)
+        self.cmd_list.setCurrentRow(0)
+        self._cmd_popup_navigated = False
+        self._position_cmd_popup(len(matches))
+        if not self.cmd_popup.isVisible():
+            self.cmd_popup.setVisible(True)
+            self.cmd_popup.raise_()
+
+    def _position_cmd_popup(self, row_count: int) -> None:
+        if not hasattr(self, "cmd_popup") or not hasattr(self, "message_input"):
+            return
+        input_pos = self.message_input.mapTo(self, QPoint(0, 0))
+        popup_w = max(360, min(540, self.message_input.width()))
+        row_h = 30
+        popup_h = min(260, 36 + row_count * row_h)
+        x = max(12, input_pos.x())
+        y = max(12, input_pos.y() - popup_h - 8)
+        self.cmd_popup.setGeometry(x, y, popup_w, popup_h)
+
+    def _handle_cmd_popup_key(self, key: int) -> bool:
+        if not hasattr(self, "cmd_popup") or not self.cmd_popup.isVisible() or self.cmd_list.count() == 0:
+            return False
+        if key == Qt.Key_Escape:
+            self.cmd_popup.setVisible(False)
+            self._cmd_popup_navigated = False
+            return True
+        if key == Qt.Key_Up:
+            row = (self.cmd_list.currentRow() - 1) % self.cmd_list.count()
+            self.cmd_list.setCurrentRow(row)
+            self._cmd_popup_navigated = True
+            return True
+        if key == Qt.Key_Down:
+            row = (self.cmd_list.currentRow() + 1) % self.cmd_list.count()
+            self.cmd_list.setCurrentRow(row)
+            self._cmd_popup_navigated = True
+            return True
+        if key == Qt.Key_Tab:
+            item = self.cmd_list.currentItem()
+            if item is not None:
+                cmd, _auto_exec = item.data(Qt.UserRole)
+                self.message_input.setText(cmd)
+                self.message_input.setCursorPosition(len(cmd))
+                if not cmd.endswith(" "):
+                    self.cmd_popup.setVisible(False)
+            return True
+        return False
+
+    @Slot(QListWidgetItem)
+    def _on_cmd_suggest_item_clicked(self, item: QListWidgetItem) -> None:
+        self._apply_cmd_suggestion(item)
+
+    def _apply_cmd_suggestion(self, item: Optional[QListWidgetItem]) -> bool:
+        if item is None:
+            return False
+        cmd, auto_exec = item.data(Qt.UserRole)
+        self.cmd_popup.setVisible(False)
+        self._cmd_popup_navigated = False
+        if auto_exec:
+            self.message_input.remember(cmd.strip())
+            self.message_input.clear()
+            self.command_parser.handle_user_input(cmd.strip())
+        else:
+            self.message_input.setText(cmd)
+            self.message_input.setCursorPosition(len(cmd))
+        self.message_input.setFocus()
+        return True
+
+    def _animate_fade_in(self, widget: QWidget, duration_ms: int = 180) -> None:
+        """Hiệu ứng chuyển cảnh Fade-in mượt mà khi xuất hiện bong bóng mới hoặc đổi khung chat."""
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(duration_ms)
+        anim.setStartValue(0.15)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        def _cleanup() -> None:
+            if anim in self._active_animations:
+                self._active_animations.remove(anim)
+            if widget is not None and widget.graphicsEffect() is effect:
+                widget.setGraphicsEffect(None)
+
+        anim.finished.connect(_cleanup)
+        self._active_animations.append(anim)
+        anim.start()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if watched in (getattr(self, "message_input", None), getattr(self, "search_input", None)):
+            if event.type() == QEvent.FocusIn and isinstance(watched, QWidget):
+                glow = QGraphicsDropShadowEffect(watched)
+                glow.setBlurRadius(16)
+                glow.setOffset(0, 2)
+                glow.setColor(QColor(47, 128, 237, 65))
+                watched.setGraphicsEffect(glow)
+            elif event.type() == QEvent.FocusOut and isinstance(watched, QWidget):
+                watched.setGraphicsEffect(None)
+                if watched is getattr(self, "message_input", None) and hasattr(self, "cmd_popup"):
+                    QTimer.singleShot(150, lambda: self.cmd_popup.setVisible(False) if not self.message_input.hasFocus() else None)
+        return super().eventFilter(watched, event)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "cmd_popup") and self.cmd_popup.isVisible():
+            self._position_cmd_popup(self.cmd_list.count())
+
     # ------------------------------------------------------------------
     # Hành động của người dùng -> CommandParser
     # ------------------------------------------------------------------
@@ -1218,10 +2148,60 @@ class MainWindow(QMainWindow):
         text = self.message_input.text()
         if not text.strip():
             return
+        if hasattr(self, "cmd_popup") and self.cmd_popup.isVisible() and self.cmd_list.count() > 0:
+            stripped = text.strip().lower()
+            known_exact = {c.strip().lower() for c, _, _ in SLASH_COMMANDS}
+            if self._cmd_popup_navigated or stripped not in known_exact:
+                if self._apply_cmd_suggestion(self.cmd_list.currentItem()):
+                    return
+            self.cmd_popup.setVisible(False)
+            self._cmd_popup_navigated = False
+
+        if self._replying_to_message is not None and not text.strip().startswith("/"):
+            reply_target = self._replying_to_message
+            self._cancel_reply_bar()
+            self.message_input.remember(text.strip())
+            self.message_input.clear()
+            self._send_reply_chat_text(text.strip(), reply_target)
+            self.message_input.setFocus()
+            return
+
         self.message_input.remember(text.strip())
         self.message_input.clear()
         self.command_parser.handle_user_input(text)
         self.message_input.setFocus()
+
+    def _send_reply_chat_text(self, text: str, reply_target: ChatMessage) -> None:
+        """Gửi tin nhắn trả lời kèm trích dẫn (`REPLY_PREFIX`) đồng bộ qua TCP."""
+        peer = self.shared_state.get_active_chat()
+        if peer is None:
+            self.command_parser.handle_user_input(text)
+            return
+        raw_quote = (
+            f"\U0001f4c4 {reply_target.file_name or reply_target.content}"
+            if getattr(reply_target, "is_file", False)
+            else reply_target.content
+        )
+        safe_quote = " ".join((raw_quote or "").replace("|", "\u00a6").splitlines()).strip()
+        if len(safe_quote) > 120:
+            safe_quote = safe_quote[:117] + "..."
+
+        wire_payload = f"{REPLY_PREFIX}{safe_quote}|{text}"
+        if not self.command_parser.tcp_manager.send_text_message(peer.peer_id, wire_payload):
+            self.on_system_notification(
+                f"[!] Message not delivered: connection to {peer.name} failed. Try /chat {peer.name} again."
+            )
+            return
+
+        my_name, _, _ = self.shared_state.get_my_info()
+        msg = ChatMessage(
+            sender_name=my_name,
+            sender_id=SELF_SENDER_ID,
+            content=text,
+            reply_to_text=safe_quote,
+        )
+        self.shared_state.append_message(peer.peer_id, msg)
+        self.signals.chat_message_received.emit(peer.peer_id, msg)
 
     @Slot(QListWidgetItem)
     def _on_peer_item_activated(self, item: QListWidgetItem) -> None:
@@ -1305,10 +2285,30 @@ class MainWindow(QMainWindow):
     def on_system_notification(self, text: str) -> None:
         if not text:
             return
-        is_error = text.lstrip().startswith("[!]")
+        stripped = text.lstrip()
+        is_error = stripped.startswith("[!]")
         color = ERROR_COLOR if is_error else SYSTEM_COLOR
-        card_name = "errorNoticeCard" if is_error else "systemNoticeCard"
 
+        # Luôn ghi nhận vào QTextEdit ẩn (`self.chat_display`) để giữ tương thích cho bộ kiểm thử tự động
+        self._append_html(
+            f'<span style="color:{color};">{self._escape_multiline(text)}</span>',
+            monospace=True,
+        )
+
+        # Trên giao diện khung chat thật (`self.chat_canvas`), ẩn toàn bộ thông báo hệ thống [*]
+        # trong lúc chat (gửi/nhận file, thu hồi, bắt đầu chat, online/offline...);
+        # chỉ hiển thị lỗi [!] hoặc kết quả khi người dùng chủ động gõ lệnh /list hay /help.
+        show_on_canvas = is_error or stripped.startswith(
+            (
+                "[*] Available commands:",
+                "[*] Online users",
+                "[*] No other users online",
+            )
+        )
+        if not show_on_canvas:
+            return
+
+        card_name = "errorNoticeCard" if is_error else "systemNoticeCard"
         card = QFrame(self.chat_canvas)
         card.setObjectName(card_name)
         card_layout = QHBoxLayout(card)
@@ -1325,13 +2325,36 @@ class MainWindow(QMainWindow):
         card_layout.addWidget(label)
         self._add_chat_widget(card)
 
-        self._append_html(
-            f'<span style="color:{color};">{self._escape_multiline(text)}</span>',
-            monospace=True,
-        )
-
     @Slot(str, object)
     def on_chat_message_received(self, peer_id: str, message: object) -> None:
+        if isinstance(message, ChatMessage) and message.content.startswith(REACT_PREFIX):
+            payload_part = message.content[len(REACT_PREFIX):]
+            history_list = self.shared_state.chat_histories.get(peer_id, [])
+            if message in history_list:
+                history_list.remove(message)
+            if "|" in payload_part:
+                target_key, emoji_val = payload_part.rsplit("|", 1)
+                for candidate in reversed(history_list):
+                    if not candidate.is_recalled and (
+                        candidate.msg_id == target_key or candidate.content == target_key
+                    ):
+                        if emoji_val:
+                            candidate.reactions[peer_id] = emoji_val
+                        else:
+                            candidate.reactions.pop(peer_id, None)
+                        widget = self._bubble_widgets.get(id(candidate))
+                        if widget is not None:
+                            widget.refresh_appearance()
+                        break
+            return
+
+        if isinstance(message, ChatMessage) and message.content.startswith(REPLY_PREFIX):
+            payload_part = message.content[len(REPLY_PREFIX):]
+            if "|" in payload_part:
+                reply_quote, real_body = payload_part.split("|", 1)
+                message.reply_to_text = reply_quote
+                message.content = real_body
+
         if isinstance(message, ChatMessage) and message.content.startswith(RECALL_PREFIX):
             # Hỗ trợ cả khi chạy qua MockTCPManager / deliver_message trong tests
             target_text = message.content[len(RECALL_PREFIX):]
@@ -1353,14 +2376,15 @@ class MainWindow(QMainWindow):
 
         if peer_id == self._active_peer_id:
             if isinstance(message, ChatMessage) and id(message) in self._rendered_message_ids:
-                # Nếu là tin nhắn vừa được đánh dấu thu hồi từ luồng TCP, cập nhật lại bong bóng hiện có
-                if message.is_recalled and id(message) in self._bubble_widgets:
+                # Nếu là tin nhắn vừa được đánh dấu thu hồi hoặc thả cảm xúc từ luồng TCP, cập nhật lại bong bóng
+                if id(message) in self._bubble_widgets:
                     self._bubble_widgets[id(message)].refresh_appearance()
-                    self._rebuild_plain_text_mirror()
+                    if message.is_recalled:
+                        self._rebuild_plain_text_mirror()
                 return
             self._rendered_message_ids.add(id(message))
             if isinstance(message, ChatMessage) and id(message) not in self._deleted_for_me_ids:
-                self._add_message_bubble(message)
+                self._add_message_bubble(message, animate=True)
             self._append_html(self._format_message(message))
             return
 
@@ -1413,6 +2437,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object, object, int)
     def on_active_chat_changed(self, peer: Optional[PeerInfo], history: object, unread: int) -> None:
+        self._cancel_reply_bar()
         self._clear_chat_widgets()
         self.chat_display.clear()
         self._rendered_message_ids.clear()
@@ -1434,8 +2459,9 @@ class MainWindow(QMainWindow):
                 )
             self._rendered_message_ids.add(id(message))
             if isinstance(message, ChatMessage):
-                self._add_message_bubble(message)
+                self._add_message_bubble(message, animate=False)
             self._append_html(self._format_message(message))
+        self._animate_fade_in(self.chat_canvas, duration_ms=180)
 
     @Slot(str)
     def on_my_status_changed(self, status: str) -> None:
@@ -1470,7 +2496,7 @@ class MainWindow(QMainWindow):
         if at_bottom:
             QTimer.singleShot(0, lambda: scrollbar.setValue(scrollbar.maximum()))
 
-    def _add_message_bubble(self, message: ChatMessage) -> None:
+    def _add_message_bubble(self, message: ChatMessage, animate: bool = False) -> None:
         if message.is_system:
             self.on_system_notification(message.content)
             return
@@ -1480,10 +2506,15 @@ class MainWindow(QMainWindow):
             is_self=is_self,
             on_delete_for_me=self._delete_message_for_me,
             on_recall_message=self._recall_message_for_everyone,
+            on_react_message=self._react_to_message,
+            on_reply_message=self._start_reply_to_message,
+            on_forward_message=self._open_forward_dialog,
             parent=self.chat_canvas,
         )
         self._bubble_widgets[id(message)] = bubble
         self._add_chat_widget(bubble)
+        if animate:
+            self._animate_fade_in(bubble, duration_ms=170)
 
     def _add_unread_separator_widget(self, unread: int) -> None:
         card = QFrame(self.chat_canvas)

@@ -9,8 +9,11 @@
 
 import os
 import socket
+import tempfile
 import threading
 import time
+from typing import Optional
+from core.models import ChatMessage
 from core.shared_state import SharedState
 from network.protocol import encode_file_header, recv_exact
 
@@ -119,23 +122,24 @@ class FileTransferService:
                 f"[!] Truyền file \"{filename}\" bị gián đoạn: {exc}."
             )
 
-    def _get_unique_save_path(self, filename: str) -> str:
+    def _get_unique_save_path(self, filename: str, target_dir: Optional[str] = None) -> str:
         """
-        Tạo đường dẫn lưu file trong \"downloads/\". Nếu đã tồn tại file trùng tên,
+        Tạo đường dẫn lưu file trong thư mục đích (mặc định là \"downloads/\"). Nếu đã tồn tại file trùng tên,
         tự động thêm hậu tố (1), (2),... để tránh ghi đè dữ liệu cũ.
         """
 
+        base_dir = target_dir or self.download_dir
         safe_name = os.path.basename(filename) or "received_file"
-        os.makedirs(self.download_dir, exist_ok = True)
+        os.makedirs(base_dir, exist_ok = True)
 
-        candidate = os.path.join(self.download_dir, safe_name)
+        candidate = os.path.join(base_dir, safe_name)
         if not os.path.exists(candidate):
             return candidate
 
         stem, ext = os.path.splitext(safe_name)
         counter = 1
         while True:
-            candidate = os.path.join(self.download_dir, f"{stem}({counter}){ext}")
+            candidate = os.path.join(base_dir, f"{stem}({counter}){ext}")
             if not os.path.exists(candidate):
                 return candidate
             counter += 1
@@ -151,8 +155,15 @@ class FileTransferService:
         Được gọi từ Thread 05 (TCP Receiver) khi gặp header \"FILE|<filename>|<filesize>|\".
         """
 
-        save_path = self._get_unique_save_path(filename)
+        stage_mode = bool(getattr(self.signals, "stage_incoming_files", False))
+        target_dir = (
+            os.path.join(tempfile.gettempdir(), "lanchat_incoming_cache")
+            if stage_mode
+            else self.download_dir
+        )
+        save_path = self._get_unique_save_path(filename, target_dir = target_dir)
         saved_name = os.path.basename(save_path)
+        display_name = os.path.basename(filename) or saved_name
         received_bytes = 0
         last_reported_percent = -1
         completed = False
@@ -181,9 +192,28 @@ class FileTransferService:
                 self.signals.file_progress_updated.emit(peer_id, saved_name, 100)
 
             completed = True
-            self.signals.system_notification.emit(
-                f"[*] File \"{saved_name}\" saved to \"{self.download_dir}/\""
-            )
+            if stage_mode:
+                peer_info = self.shared_state.find_peer(peer_id)
+                sender_name = peer_info.name if peer_info else peer_id
+                file_msg = ChatMessage(
+                    sender_name = sender_name,
+                    sender_id = peer_id,
+                    content = display_name,
+                    timestamp = time.time(),
+                    is_system = False,
+                    is_file = True,
+                    file_name = display_name,
+                    file_size = filesize,
+                    file_path = save_path,
+                )
+                unread = self.shared_state.append_message(peer_id, file_msg)
+                self.signals.chat_message_received.emit(peer_id, file_msg)
+                if unread > 0:
+                    self.signals.peer_list_updated.emit()
+            else:
+                self.signals.system_notification.emit(
+                    f"[*] File \"{saved_name}\" saved to \"{self.download_dir}/\""
+                )
         except Exception as exc:
             # Xóa file dở dang nếu quá trình nhận bị lỗi hoặc đứt kết nối giữa chừng.
             if os.path.exists(save_path):

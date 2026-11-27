@@ -7,6 +7,8 @@ ONLINE = "online"
 AWAY = "away"
 VALID_STATUSES = (ONLINE, AWAY)
 RECALL_PREFIX = "__LANCHAT_RECALL__|"
+REACT_PREFIX = "__LANCHAT_REACT__|"
+REPLY_PREFIX = "__LANCHAT_REPLY__|"
 
 
 @dataclass
@@ -32,6 +34,12 @@ class ChatMessage:
     is_system: bool = False
     msg_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     is_recalled: bool = False
+    is_file: bool = False
+    file_name: str = ""
+    file_size: int = 0
+    file_path: str = ""
+    reactions: dict = field(default_factory=dict)
+    reply_to_text: str = ""
 
 
 @dataclass

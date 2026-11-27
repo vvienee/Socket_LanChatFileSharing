@@ -21,6 +21,9 @@ class AppSignals(QObject):
     Qt sẽ tự động đẩy sự kiện về Main Thread của Thành viên C một cách an toàn.
     """
 
+    # Đánh dấu ứng dụng GUI nhận file vào vùng đệm tạm và hiển thị nút "Tải về" trên khung chat
+    stage_incoming_files: bool = True
+
     # ------------------------------------------------------------------
     # Hợp đồng gốc (overview.md mục 4.3) - Thành viên A/B phát từ luồng nền
     # ------------------------------------------------------------------

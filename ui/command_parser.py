@@ -222,6 +222,19 @@ class CommandParser:
         self._notify(f"[*] Sending {os.path.basename(path)} ({format_size(size)}) to {peer.name} ...")
         self.tcp_manager.send_file_async(peer.peer_id, path)
 
+        my_name, _, _ = self.shared_state.get_my_info()
+        file_msg = ChatMessage(
+            sender_name=my_name,
+            sender_id=SELF_SENDER_ID,
+            content=os.path.basename(path),
+            is_file=True,
+            file_name=os.path.basename(path),
+            file_size=size,
+            file_path=path,
+        )
+        self.shared_state.append_message(peer.peer_id, file_msg)
+        self.signals.chat_message_received.emit(peer.peer_id, file_msg)
+
     def _cmd_leave(self) -> None:
         """
         Lệnh `/leave`: Đóng cuộc trò chuyện hiện tại và quay về màn hình chờ chính.
