@@ -351,7 +351,37 @@ class SelfTest:
         self.window.show()
         self.pump()
 
-        self.check("sidebar shows 4 peers", window.peer_list_widget.count() == 4, str(window.peer_list_widget.count()))
+        self.check(
+            "search bar uses English placeholder",
+            "Search" in window.search_input.placeholderText()
+            and "Tìm kiếm" not in window.search_input.placeholderText(),
+            window.search_input.placeholderText(),
+        )
+        online_ids = [
+            window.peer_list_widget.item(i).data(0x0100)
+            for i in range(window.peer_list_widget.count())
+            if window.peer_list_widget.item(i).data(0x0100)
+        ]
+        lan = self.mock.peer("Lan")
+        self.check(
+            "Online Users tab shows strictly online peers (excludes away)",
+            len(online_ids) == 3 and lan.peer_id not in online_ids and window.online_users_btn.text() == "Online Users (3)",
+            f"ids={online_ids} btn={window.online_users_btn.text()!r}",
+        )
+        window.all_chats_btn.click()
+        self.pump()
+        all_chat_ids_initial = [
+            window.peer_list_widget.item(i).data(0x0100)
+            for i in range(window.peer_list_widget.count())
+            if window.peer_list_widget.item(i).data(0x0100)
+        ]
+        self.check(
+            "All Chats tab initially empty before messaging",
+            len(all_chat_ids_initial) == 0 and window.all_chats_btn.text() == "All Chats (0)",
+            f"ids={all_chat_ids_initial} btn={window.all_chats_btn.text()!r}",
+        )
+        window.online_users_btn.click()
+        self.pump()
 
         self.run_cmd("/help")
         self.check("/help lists every command", all(c in self.display() for c in
@@ -480,6 +510,82 @@ class SelfTest:
         tcp.raise_on_send = False
         self.check("exception in network layer is caught and shown",
                    "Error while running send message: RuntimeError" in self.display())
+
+        # Kiểm thử tab All Chats (hiển thị tất cả người đã nhắn tin, tìm kiếm, xem lịch sử khi offline)
+        window.all_chats_btn.click()
+        self.pump(0.1)
+        chat_ids = [
+            window.peer_list_widget.item(i).data(0x0100)
+            for i in range(window.peer_list_widget.count())
+            if window.peer_list_widget.item(i).data(0x0100)
+        ]
+        self.check(
+            "All Chats tab shows users with chat history",
+            minh.peer_id in chat_ids and huy.peer_id in chat_ids and len(chat_ids) == 2
+            and window.all_chats_btn.text() == "All Chats (2)",
+            f"ids={chat_ids} btn={window.all_chats_btn.text()!r}",
+        )
+
+        window.search_input.setText("demo file.bin")
+        self.pump()
+        filtered_ids = [
+            window.peer_list_widget.item(i).data(0x0100)
+            for i in range(window.peer_list_widget.count())
+            if window.peer_list_widget.item(i).data(0x0100)
+        ]
+        self.check(
+            "search filters All Chats by last message preview",
+            filtered_ids == [huy.peer_id],
+            str(filtered_ids),
+        )
+        window.search_input.setText("xin chào")
+        self.pump()
+        filtered_minh = [
+            window.peer_list_widget.item(i).data(0x0100)
+            for i in range(window.peer_list_widget.count())
+            if window.peer_list_widget.item(i).data(0x0100)
+        ]
+        self.check(
+            "search filters All Chats by UTF-8 last message preview",
+            filtered_minh == [minh.peer_id],
+            str(filtered_minh),
+        )
+        window.search_input.clear()
+        self.pump()
+
+        # Giả lập Huy offline -> biến mất khỏi Online Users nhưng vẫn xem lại lịch sử read-only ở All Chats
+        state.remove_peer(huy.peer_id)
+        self.mock.signals.peer_list_updated.emit()
+        self.pump(0.1)
+        self.check(
+            "offline peer removed from Online Users count but kept in All Chats",
+            window.online_users_btn.text() == "Online Users (2)" and window.all_chats_btn.text() == "All Chats (2)",
+            f"online={window.online_users_btn.text()!r} chats={window.all_chats_btn.text()!r}",
+        )
+        huy_item = next(
+            (window.peer_list_widget.item(i) for i in range(window.peer_list_widget.count())
+             if window.peer_list_widget.item(i).data(0x0100) == huy.peer_id),
+            None,
+        )
+        self.check("offline conversation item found in All Chats", huy_item is not None)
+        if huy_item is not None:
+            window._on_peer_item_activated(huy_item)
+            self.pump(0.1)
+        self.check(
+            "clicking offline peer in All Chats opens read-only history",
+            "Chat history with Huy" in window.chat_header_label.text()
+            and "huy-msg-1" in self.display()
+            and not window.send_file_btn.isEnabled()
+            and not window.leave_btn.isEnabled(),
+            f"header={window.chat_header_label.text()!r}",
+        )
+        window.message_input.setText("can I still send?")
+        window._on_submit_input()
+        self.pump()
+        self.check(
+            "sending text while viewing offline history shows read-only warning",
+            "Huy is currently offline" in self.display(),
+        )
 
         self.run_cmd("/quit")
         window.close()

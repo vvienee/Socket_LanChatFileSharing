@@ -186,13 +186,32 @@ QLineEdit#searchInput:focus {
     background: #ffffff;
     border: 1.5px solid #2f80ed;
 }
-QLabel#filterPillActive {
+QPushButton#filterPillActive {
     background: #2f80ed;
     color: #ffffff;
-    border-radius: 6px;
-    padding: 4px 10px;
-    font-size: 12px;
+    border: 1px solid #2f80ed;
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 700;
+}
+QPushButton#filterPillActive:hover {
+    background: #1f6fd8;
+    border: 1px solid #1f6fd8;
+}
+QPushButton#filterPillInactive {
+    background: #ffffff;
+    color: #4f5e7b;
+    border: 1px solid #e6ecf5;
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-size: 11px;
     font-weight: 600;
+}
+QPushButton#filterPillInactive:hover {
+    background: #f2f7ff;
+    color: #2f80ed;
+    border: 1px solid #cfe0fa;
 }
 QLabel#sectionLabel {
     background: #ffffff;
@@ -1171,7 +1190,7 @@ class ForwardMessageDialog(QDialog):
 
         self.search_edit = QLineEdit(self)
         self.search_edit.setObjectName("searchInput")
-        self.search_edit.setPlaceholderText("Tìm người nhận theo tên hoặc IP...")
+        self.search_edit.setPlaceholderText("Search recipients by name or IP...")
         self.search_edit.textChanged.connect(self._filter_peers)
         layout.addWidget(self.search_edit)
 
@@ -1272,12 +1291,24 @@ class HistoryLineEdit(QLineEdit):
 class PeerItemWidget(QWidget):
     """
     Một dòng người dùng trên Sidebar theo thiết kế Figma (Frame 1:146, cao 64px):
-    - Avatar tròn 44x44px kèm chấm trạng thái SVG (online xanh lá, away vàng).
-    - Cột giữa: Số thứ tự + Tên (#1B1A57 Medium 13px) và icon check + Địa chỉ IP:Port (#4F5E7B 12px).
-    - Cột phải: Trạng thái/nhãn "Active" và badge số tin chưa đọc (#2F80ED pill).
+    - Chế độ `mode="online"` (tab Online Users):
+      Avatar tròn 44x44px kèm chấm trạng thái xanh lá, số thứ tự + Tên (khớp /chat <số>),
+      icon check + Địa chỉ IP:Port, cột phải hiện Active/Online + unread badge.
+    - Chế độ `mode="chat"` (tab All Chats):
+      Kiểu Messenger: Avatar kèm chấm trạng thái online/away/offline, Tên người dùng,
+      preview tin nhắn cuối cùng, cột phải hiện giờ gửi HH:MM + unread badge (hoặc nhãn Offline).
     """
 
-    def __init__(self, index: int, peer: PeerInfo, unread: int, is_active: bool) -> None:
+    def __init__(
+        self,
+        index: int,
+        peer: PeerInfo,
+        unread: int,
+        is_active: bool,
+        mode: str = "online",
+        last_message_preview: str = "",
+        last_message_time: Optional[float] = None,
+    ) -> None:
         super().__init__()
         self.setAttribute(Qt.WA_TransparentForMouseEvents)  # để click đi xuống QListWidget
 
@@ -1285,22 +1316,26 @@ class PeerItemWidget(QWidget):
         outer.setContentsMargins(10, 8, 10, 8)
         outer.setSpacing(12)
 
+        is_offline = peer.status == "offline"
+
         # 1. Avatar + Status Dot SVG
         avatar_label = QLabel()
         avatar_label.setFixedSize(44, 44)
-        avatar_label.setPixmap(_build_avatar_pixmap(peer.name, size=44, status=peer.status, avatar_index=index - 1))
+        avatar_label.setPixmap(_build_avatar_pixmap(peer.name, size=44, status=peer.status, avatar_index=max(0, index - 1)))
         avatar_label.setToolTip(peer.status)
         outer.addWidget(avatar_label, 0, Qt.AlignVCenter)
 
-        # 2. Tên & Địa chỉ IP:Port
+        # 2. Tên & Dòng phụ (IP:Port ở Online Users, hoặc preview tin nhắn cuối ở All Chats)
         text_box = QVBoxLayout()
         text_box.setContentsMargins(0, 0, 0, 0)
         text_box.setSpacing(3)
 
-        name_label = QLabel(f"{index}. {peer.name}")
+        display_title = peer.name if mode == "chat" else f"{index}. {peer.name}"
+        name_label = QLabel(display_title)
         name_label.setTextFormat(Qt.PlainText)
         name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        name_label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px;")
+        title_color = TEXT_SECONDARY if is_offline and not is_active else TEXT_COLOR
+        name_label.setStyleSheet(f"color: {title_color}; font-size: 13px;")
         name_font = name_label.font()
         name_font.setBold(True if (is_active or unread > 0) else False)
         name_font.setWeight(QFont.Bold if (is_active or unread > 0) else QFont.Medium)
@@ -1310,30 +1345,49 @@ class PeerItemWidget(QWidget):
         sub_row.setContentsMargins(0, 0, 0, 0)
         sub_row.setSpacing(4)
 
-        check_icon = QLabel()
-        check_icon.setFixedSize(14, 14)
-        check_icon.setPixmap(_load_svg_pixmap("icon_check.svg", 14, 14))
-        sub_row.addWidget(check_icon, 0, Qt.AlignVCenter)
+        if mode == "chat":
+            preview_text = last_message_preview or "No messages yet"
+            sub_label = QLabel(preview_text)
+            sub_label.setTextFormat(Qt.PlainText)
+            sub_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            sub_color = TEXT_COLOR if unread > 0 else TEXT_SECONDARY
+            sub_weight = "600" if unread > 0 else "400"
+            sub_label.setStyleSheet(f"color: {sub_color}; font-size: 12px; font-weight: {sub_weight};")
+            sub_row.addWidget(sub_label, 1)
+        else:
+            check_icon = QLabel()
+            check_icon.setFixedSize(14, 14)
+            check_icon.setPixmap(_load_svg_pixmap("icon_check.svg", 14, 14))
+            sub_row.addWidget(check_icon, 0, Qt.AlignVCenter)
 
-        status_text = f" \u00b7 {peer.status}" if peer.status != "online" else ""
-        addr_label = QLabel(f"{peer.ip}:{peer.tcp_port}{status_text}")
-        addr_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        addr_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
-        sub_row.addWidget(addr_label, 1)
+            status_text = f" \u00b7 {peer.status}" if peer.status != "online" else ""
+            addr_label = QLabel(f"{peer.ip}:{peer.tcp_port}{status_text}")
+            addr_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            addr_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+            sub_row.addWidget(addr_label, 1)
 
         text_box.addWidget(name_label)
         text_box.addLayout(sub_row)
         outer.addLayout(text_box, 1)
 
-        # 3. Cột phải: Thời gian/Trạng thái + Unread Badge (#2F80ED)
+        # 3. Cột phải: Thời gian/Trạng thái + Unread Badge (#2F80ED) hoặc nhãn Offline
         right_box = QVBoxLayout()
         right_box.setContentsMargins(0, 0, 0, 0)
         right_box.setSpacing(4)
         right_box.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        meta_label = QLabel("Active" if is_active else peer.status.capitalize())
+        if mode == "chat":
+            if last_message_time is not None:
+                meta_text = time.strftime("%H:%M", time.localtime(last_message_time))
+            else:
+                meta_text = "Active" if is_active else peer.status.capitalize()
+            meta_color = PRIMARY_BLUE if (is_active or unread > 0) else PLACEHOLDER_COLOR
+        else:
+            meta_text = "Active" if is_active else peer.status.capitalize()
+            meta_color = PRIMARY_BLUE if is_active else PLACEHOLDER_COLOR
+
+        meta_label = QLabel(meta_text)
         meta_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        meta_color = PRIMARY_BLUE if is_active else PLACEHOLDER_COLOR
         meta_label.setStyleSheet(f"color: {meta_color}; font-size: 11px; font-weight: 600;")
         right_box.addWidget(meta_label, 0, Qt.AlignRight)
 
@@ -1343,6 +1397,12 @@ class PeerItemWidget(QWidget):
         self.badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.badge.setVisible(unread > 0)
         right_box.addWidget(self.badge, 0, Qt.AlignRight)
+
+        if mode == "chat" and is_offline and unread == 0:
+            offline_tag = QLabel("Offline")
+            offline_tag.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            offline_tag.setStyleSheet("color: #8c97ac; font-size: 10px; font-weight: 600;")
+            right_box.addWidget(offline_tag, 0, Qt.AlignRight)
 
         outer.addLayout(right_box, 0)
 
@@ -1382,7 +1442,9 @@ class MainWindow(QMainWindow):
         self.send_btn: QPushButton
         self.send_file_btn: QPushButton
         self.leave_btn: QPushButton
-        self.online_count_label: QLabel
+        self.all_chats_btn: QPushButton
+        self.online_users_btn: QPushButton
+        self.online_count_label: QPushButton
         self.my_name_label: QLabel
         self.my_avatar_label: ClickableAvatarLabel
         self.chat_avatar_label: QLabel
@@ -1399,8 +1461,11 @@ class MainWindow(QMainWindow):
 
         # Trạng thái riêng của giao diện (chỉ truy cập từ Main Thread)
         self._active_peer_id: Optional[str] = None
+        self._viewing_offline_peer_id: Optional[str] = None
+        self._sidebar_tab: str = "online"                  # "online" | "all_chats"
         self._pending_sidebar_peer_id: Optional[str] = None
         self._peer_names: Dict[str, str] = {}              # cache peer_id -> tên (kể cả khi peer đã offline)
+        self._known_peers: Dict[str, PeerInfo] = {}        # cache PeerInfo gần nhất (dùng khi peer offline)
         self._rendered_message_ids: Set[int] = set()       # chống hiển thị trùng 1 tin nhắn
         self._bubble_widgets: Dict[int, ChatBubbleWidget] = {}  # id(message) -> widget bong bóng
         self._deleted_for_me_ids: Set[int] = set()         # id(message) đã bấm "Xóa ở phía bạn"
@@ -1410,6 +1475,10 @@ class MainWindow(QMainWindow):
         self._search_filter_text: str = ""
         self._my_avatar_index: int = 1
         self._my_custom_avatar_path: Optional[str] = None
+
+        self._sidebar_refresh_timer = QTimer(self)
+        self._sidebar_refresh_timer.setSingleShot(True)
+        self._sidebar_refresh_timer.timeout.connect(self.on_peer_list_updated)
 
         self._progress_hide_timer = QTimer(self)
         self._progress_hide_timer.setSingleShot(True)
@@ -1503,24 +1572,29 @@ class MainWindow(QMainWindow):
         # 3. Ô tìm kiếm bạn bè bo tròn (có icon kính lúp bên trong)
         self.search_input = QLineEdit()
         self.search_input.setObjectName("searchInput")
-        self.search_input.setPlaceholderText("Tìm kiếm bạn bè theo tên hoặc IP...")
+        self.search_input.setPlaceholderText("Search friends by name or IP...")
         self.search_input.setClearButtonEnabled(True)
         search_action = QAction(QIcon(_load_svg_pixmap("icon_search.svg", 16, 16)), "", self.search_input)
         self.search_input.addAction(search_action, QLineEdit.LeadingPosition)
         left_layout.addWidget(self.search_input)
 
-        # 4. Hàng Filter Pills ("All chats" #2F80ED + "ONLINE USERS (N)")
+        # 4. Hàng Filter Pills tương tác ("All Chats (N)" & "Online Users (M)")
         pills_row = QHBoxLayout()
         pills_row.setContentsMargins(2, 0, 2, 2)
         pills_row.setSpacing(8)
 
-        all_chats_pill = QLabel("All chats")
-        all_chats_pill.setObjectName("filterPillActive")
-        pills_row.addWidget(all_chats_pill, 0)
+        self.all_chats_btn = QPushButton("All Chats (0)")
+        self.all_chats_btn.setObjectName("filterPillInactive")
+        self.all_chats_btn.setCursor(Qt.PointingHandCursor)
+        self.all_chats_btn.setToolTip("Show all users you have chatted with (including offline)")
+        pills_row.addWidget(self.all_chats_btn, 0)
 
-        self.online_count_label = QLabel("ONLINE USERS (0)")
-        self.online_count_label.setObjectName("sectionLabel")
-        pills_row.addWidget(self.online_count_label, 0)
+        self.online_users_btn = QPushButton("Online Users (0)")
+        self.online_users_btn.setObjectName("filterPillActive")
+        self.online_users_btn.setCursor(Qt.PointingHandCursor)
+        self.online_users_btn.setToolTip("Show friends currently online (status: online)")
+        self.online_count_label = self.online_users_btn
+        pills_row.addWidget(self.online_users_btn, 0)
         pills_row.addStretch(1)
         left_layout.addLayout(pills_row)
 
@@ -1752,6 +1826,8 @@ class MainWindow(QMainWindow):
         self.emoji_btn.clicked.connect(self._on_emoji_clicked)
         self.my_avatar_label.clicked.connect(self._on_change_avatar_clicked)
         self.search_input.textChanged.connect(self._on_search_text_changed)
+        self.all_chats_btn.clicked.connect(lambda: self.set_sidebar_tab("all_chats"))
+        self.online_users_btn.clicked.connect(lambda: self.set_sidebar_tab("online"))
         self.leave_btn.clicked.connect(self._on_leave_clicked)
         self.peer_list_widget.itemClicked.connect(self._on_peer_item_activated)
         self.peer_list_widget.itemActivated.connect(self._on_peer_item_activated)
@@ -1838,9 +1914,37 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_search_text_changed(self, text: str) -> None:
-        """Lọc danh sách bạn bè trên Sidebar theo tên, IP:Port hoặc trạng thái."""
+        """Lọc danh sách bạn bè / cuộc trò chuyện trên Sidebar theo tên, IP:Port hoặc nội dung tin cuối."""
         self._search_filter_text = (text or "").strip().lower()
         self.on_peer_list_updated()
+
+    def set_sidebar_tab(self, tab: str) -> None:
+        """
+        Chuyển tab trên Sidebar:
+        - "online": Tab Online Users — chỉ hiển thị bạn bè đang có trạng thái status == "online" (ẩn away & offline).
+        - "all_chats": Tab All Chats — chỉ hiển thị tất cả người dùng đã từng nhắn tin / mở chat (gồm cả offline).
+        """
+        if tab not in ("online", "all_chats"):
+            return
+        if self._sidebar_tab == tab:
+            return
+        self._sidebar_tab = tab
+        self._update_tab_pill_styles()
+        self.on_peer_list_updated()
+
+    def _update_tab_pill_styles(self) -> None:
+        is_all_chats = self._sidebar_tab == "all_chats"
+        self.all_chats_btn.setObjectName("filterPillActive" if is_all_chats else "filterPillInactive")
+        self.online_users_btn.setObjectName("filterPillInactive" if is_all_chats else "filterPillActive")
+        for btn in (self.all_chats_btn, self.online_users_btn):
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+            btn.update()
+
+    def _schedule_sidebar_refresh(self) -> None:
+        """Gộp nhiều cập nhật liên tiếp (vd khi nhận 20 tin liền nhau) để làm mới Sidebar mượt mà."""
+        if not self._sidebar_refresh_timer.isActive():
+            self._sidebar_refresh_timer.start(30)
 
     def _delete_message_for_me(self, message: ChatMessage) -> None:
         """Xóa tin nhắn ở phía mình (Delete for you)."""
@@ -1848,6 +1952,10 @@ class MainWindow(QMainWindow):
         self._deleted_for_me_ids.add(msg_id)
         if self._active_peer_id:
             history_list = self.shared_state.chat_histories.get(self._active_peer_id, [])
+            if message in history_list:
+                history_list.remove(message)
+        elif self._viewing_offline_peer_id:
+            history_list = self.shared_state.chat_histories.get(self._viewing_offline_peer_id, [])
             if message in history_list:
                 history_list.remove(message)
 
@@ -1858,6 +1966,7 @@ class MainWindow(QMainWindow):
             widget.setParent(None)
             widget.deleteLater()
         self._rebuild_plain_text_mirror()
+        self._schedule_sidebar_refresh()
         self.message_input.setFocus()
 
     def _recall_message_for_everyone(self, message: ChatMessage) -> None:
@@ -1866,7 +1975,7 @@ class MainWindow(QMainWindow):
         - Đổi bong bóng ở máy mình sang '🚫 Bạn đã thu hồi một tin nhắn' và thông báo trên khung chat.
         - Gửi khung điều khiển `__LANCHAT_RECALL__|<nội dung gốc>` qua TCP sang máy đối phương.
         """
-        if message.is_recalled or message.sender_id != SELF_SENDER_ID:
+        if message.is_recalled or message.sender_id != SELF_SENDER_ID or self._active_peer_id is None:
             return
         original_content = message.content
         message.is_recalled = True
@@ -1886,6 +1995,7 @@ class MainWindow(QMainWindow):
                 pass
 
         self._rebuild_plain_text_mirror()
+        self._schedule_sidebar_refresh()
         self.on_system_notification("[*] Bạn đã thu hồi một tin nhắn.")
         self.message_input.setFocus()
 
@@ -1895,7 +2005,7 @@ class MainWindow(QMainWindow):
         - Nếu bấm lại đúng cảm xúc mình đã thả thì gỡ cảm xúc đó.
         - Gửi khung điều khiển `__LANCHAT_REACT__|<nội dung>|<emoji>` sang máy đối phương.
         """
-        if message.is_recalled:
+        if message.is_recalled or self._active_peer_id is None:
             return
         if not hasattr(message, "reactions") or message.reactions is None:
             message.reactions = {}
@@ -1923,7 +2033,7 @@ class MainWindow(QMainWindow):
 
     def _start_reply_to_message(self, message: ChatMessage) -> None:
         """Hiển thị thanh '❝ Reply' kèm nội dung tin nhắn được trích dẫn ngay phía trên ô nhập."""
-        if message.is_recalled:
+        if message.is_recalled or self._active_peer_id is None:
             return
         self._replying_to_message = message
         raw_quote = (
@@ -2157,6 +2267,16 @@ class MainWindow(QMainWindow):
             self.cmd_popup.setVisible(False)
             self._cmd_popup_navigated = False
 
+        if self._viewing_offline_peer_id is not None and not text.strip().startswith("/"):
+            name = self._peer_display_name(self._viewing_offline_peer_id)
+            self.message_input.remember(text.strip())
+            self.message_input.clear()
+            self.on_system_notification(
+                f"[!] {name} is currently offline (viewing read-only chat history). Pick an online user to chat."
+            )
+            self.message_input.setFocus()
+            return
+
         if self._replying_to_message is not None and not text.strip().startswith("/"):
             reply_target = self._replying_to_message
             self._cancel_reply_bar()
@@ -2209,16 +2329,64 @@ class MainWindow(QMainWindow):
         if not peer_id or peer_id == self._active_peer_id or peer_id == self._pending_sidebar_peer_id:
             self.message_input.setFocus()
             return
+        if peer_id == self._viewing_offline_peer_id and self.shared_state.find_peer(peer_id) is None:
+            self.message_input.setFocus()
+            return
         self._pending_sidebar_peer_id = peer_id
         QTimer.singleShot(0, lambda: self._open_chat_from_sidebar(peer_id))
 
     def _open_chat_from_sidebar(self, peer_id: str) -> None:
         self._pending_sidebar_peer_id = None
-        if peer_id != self._active_peer_id:
-            self.command_parser.handle_user_input(f"/chat {peer_id}")
-            if self._active_peer_id != peer_id:
-                self.on_peer_list_updated()
+        online_peer = self.shared_state.find_peer(peer_id)
+        if online_peer is not None:
+            if peer_id != self._active_peer_id:
+                self._viewing_offline_peer_id = None
+                self.command_parser.handle_user_input(f"/chat {peer_id}")
+                if self._active_peer_id != peer_id:
+                    self.on_peer_list_updated()
+        else:
+            self._open_offline_history(peer_id)
         self.message_input.setFocus()
+
+    def _open_offline_history(self, peer_id: str) -> None:
+        """
+        Mở lại lịch sử trò chuyện ở chế độ chỉ đọc (Read-only) khi người dùng click
+        vào một cuộc trò chuyện đã Offline trong tab All Chats.
+        """
+        unread = self.shared_state.get_unread_count(peer_id)
+        history = self.shared_state.set_active_chat(peer_id)
+        # Đặt lại active_chat về None ở tầng SharedState để tránh gửi nhầm lên socket đã đóng
+        self.shared_state.set_active_chat(None)
+
+        self._cancel_reply_bar()
+        self._clear_chat_widgets()
+        self.chat_display.clear()
+        self._rendered_message_ids.clear()
+        self._active_peer_id = None
+        self._viewing_offline_peer_id = peer_id
+
+        self.leave_btn.setEnabled(False)
+        self.send_file_btn.setEnabled(False)
+        self.message_input.setPlaceholderText(
+            "This user is offline (read-only history). Switch to Online Users or type a command..."
+        )
+        self._refresh_chat_header()
+        self._update_window_title()
+
+        messages = [m for m in list(history or []) if id(m) not in self._deleted_for_me_ids]
+        first_unread = len(messages) - unread if 0 < unread <= len(messages) else None
+        for index, message in enumerate(messages):
+            if index == first_unread:
+                self._add_unread_separator_widget(unread)
+                self._append_html(
+                    f'<span style="color:{ERROR_COLOR};">\u2500\u2500\u2500\u2500  {unread} unread  \u2500\u2500\u2500\u2500</span>'
+                )
+            self._rendered_message_ids.add(id(message))
+            if isinstance(message, ChatMessage):
+                self._add_message_bubble(message, animate=False)
+            self._append_html(self._format_message(message))
+        self._animate_fade_in(self.chat_canvas, duration_ms=180)
+        self.on_peer_list_updated()
 
     @Slot()
     def _on_send_file_clicked(self) -> None:
@@ -2247,39 +2415,183 @@ class MainWindow(QMainWindow):
     # Slots nhận sự kiện từ AppSignals
     # ------------------------------------------------------------------
 
+    def _build_offline_peer_info(self, peer_id: str, messages: List[ChatMessage]) -> PeerInfo:
+        cached = self._known_peers.get(peer_id)
+        if cached is not None:
+            return PeerInfo(name=cached.name, ip=cached.ip, tcp_port=cached.tcp_port, status="offline")
+        ip, port = peer_id, 0
+        if ":" in peer_id:
+            host_part, port_part = peer_id.rsplit(":", 1)
+            ip = host_part
+            port = int(port_part) if port_part.isdigit() else 0
+        name = self._peer_names.get(peer_id)
+        if not name:
+            for msg in reversed(messages):
+                if not msg.is_system and msg.sender_id != SELF_SENDER_ID and msg.sender_name:
+                    name = msg.sender_name
+                    break
+        name = name or peer_id
+        self._peer_names[peer_id] = name
+        return PeerInfo(name=name, ip=ip, tcp_port=port, status="offline")
+
+    def _format_last_message_preview(self, message: Optional[ChatMessage]) -> str:
+        if message is None:
+            return "Start chatting..."
+        if getattr(message, "is_recalled", False):
+            raw = message.content or "Message recalled"
+        elif getattr(message, "is_file", False):
+            fname = getattr(message, "file_name", "") or message.content
+            prefix = "You: " if message.sender_id == SELF_SENDER_ID else ""
+            raw = f"{prefix}\U0001f4c4 {fname}"
+        else:
+            prefix = "You: " if message.sender_id == SELF_SENDER_ID else ""
+            raw = f"{prefix}{message.content}"
+        one_line = " ".join((raw or "").splitlines()).strip()
+        if len(one_line) > 36:
+            return one_line[:33] + "..."
+        return one_line
+
+    def _collect_all_chat_entries(
+        self,
+        online_by_id: Dict[str, PeerInfo],
+    ) -> List[Tuple[PeerInfo, Optional[ChatMessage], float]]:
+        """
+        Tổng hợp danh sách tất cả cuộc trò chuyện cho tab All Chats:
+        - Gồm mọi peer_id đã có ít nhất 1 tin nhắn trong `chat_histories` (kể cả khi đã offline),
+          cộng với peer đang mở chat (`_active_peer_id`) hoặc đang xem lịch sử (`_viewing_offline_peer_id`).
+        - Sắp xếp theo thời gian tin nhắn gần nhất giảm dần (mới nhất lên trên cùng).
+        """
+        candidate_ids: Set[str] = set()
+        histories_snapshot = dict(self.shared_state.chat_histories)
+        for pid, msgs in histories_snapshot.items():
+            visible = [m for m in msgs if isinstance(m, ChatMessage) and not m.is_system and id(m) not in self._deleted_for_me_ids]
+            if visible:
+                candidate_ids.add(pid)
+        if self._active_peer_id:
+            candidate_ids.add(self._active_peer_id)
+        if self._viewing_offline_peer_id:
+            candidate_ids.add(self._viewing_offline_peer_id)
+
+        entries: List[Tuple[PeerInfo, Optional[ChatMessage], float]] = []
+        for pid in candidate_ids:
+            raw_msgs = histories_snapshot.get(pid, [])
+            visible = [m for m in raw_msgs if isinstance(m, ChatMessage) and not m.is_system and id(m) not in self._deleted_for_me_ids]
+            last_msg = visible[-1] if visible else None
+            sort_ts = last_msg.timestamp if last_msg is not None else time.time()
+            peer = online_by_id.get(pid)
+            if peer is None:
+                peer = self._build_offline_peer_info(pid, visible)
+            entries.append((peer, last_msg, sort_ts))
+
+        entries.sort(key=lambda item: (-item[2], item[0].name.lower(), item[0].peer_id))
+        return entries
+
+    def _add_empty_sidebar_item(self, message: str) -> None:
+        item = QListWidgetItem()
+        item.setFlags(Qt.NoItemFlags)
+        item.setData(Qt.UserRole, None)
+        lbl = QLabel(message)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"color: {PLACEHOLDER_COLOR}; font-size: 12px; padding: 24px 12px;")
+        item.setSizeHint(QSize(0, max(84, lbl.sizeHint().height())))
+        self.peer_list_widget.addItem(item)
+        self.peer_list_widget.setItemWidget(item, lbl)
+
     @Slot()
     def on_peer_list_updated(self) -> None:
-        peers = self.shared_state.get_online_peers()
-        scroll_value = self.peer_list_widget.verticalScrollBar().value()
+        all_peers = self.shared_state.get_online_peers()
+        online_by_id: Dict[str, PeerInfo] = {}
+        for p in all_peers:
+            self._peer_names[p.peer_id] = p.name
+            self._known_peers[p.peer_id] = p
+            online_by_id[p.peer_id] = p
 
+        # Tab Online Users chỉ lọc những bạn bè đang có trạng thái status == "online" (ẩn away & offline),
+        # đồng thời giữ nguyên chỉ số 1-based khớp với lệnh `/list` và `/chat <number>`.
+        strict_online: List[Tuple[int, PeerInfo]] = [
+            (index, peer) for index, peer in enumerate(all_peers, start=1) if peer.status == "online"
+        ]
+        chat_entries = self._collect_all_chat_entries(online_by_id)
+
+        scroll_value = self.peer_list_widget.verticalScrollBar().value()
         self.peer_list_widget.setUpdatesEnabled(False)
         self.peer_list_widget.clear()
-        for index, peer in enumerate(peers, start=1):
-            self._peer_names[peer.peer_id] = peer.name
-            if self._search_filter_text:
-                haystack = f"{index} {peer.name} {peer.ip}:{peer.tcp_port} {peer.status}".lower()
-                if self._search_filter_text not in haystack:
-                    continue
 
-            is_active = peer.peer_id == self._active_peer_id
-            unread = 0 if is_active else self.shared_state.get_unread_count(peer.peer_id)
+        selected_peer_id = self._active_peer_id or self._viewing_offline_peer_id
+        added_count = 0
 
-            item = QListWidgetItem()
-            item.setData(Qt.UserRole, peer.peer_id)
-            item.setToolTip(
-                f"{peer.name}\n{peer.ip}:{peer.tcp_port}\nStatus: {peer.status}"
-                + (f"\nUnread: {unread}" if unread else "")
-            )
-            row_widget = PeerItemWidget(index, peer, unread, is_active)
-            item.setSizeHint(QSize(0, max(62, row_widget.sizeHint().height())))
-            self.peer_list_widget.addItem(item)
-            self.peer_list_widget.setItemWidget(item, row_widget)
-            item.setSelected(is_active)
+        if self._sidebar_tab == "all_chats":
+            for idx, (peer, last_msg, _sort_ts) in enumerate(chat_entries, start=1):
+                preview = self._format_last_message_preview(last_msg)
+                if self._search_filter_text:
+                    haystack = f"{peer.name} {peer.ip}:{peer.tcp_port} {peer.status} {preview}".lower()
+                    if self._search_filter_text not in haystack:
+                        continue
+
+                is_active = peer.peer_id == selected_peer_id
+                unread = 0 if is_active else self.shared_state.get_unread_count(peer.peer_id)
+
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, peer.peer_id)
+                item.setToolTip(
+                    f"{peer.name}\n{peer.ip}:{peer.tcp_port}\nStatus: {peer.status}"
+                    + (f"\nUnread: {unread}" if unread else "")
+                )
+                row_widget = PeerItemWidget(
+                    idx,
+                    peer,
+                    unread,
+                    is_active,
+                    mode="chat",
+                    last_message_preview=preview,
+                    last_message_time=last_msg.timestamp if last_msg is not None else None,
+                )
+                item.setSizeHint(QSize(0, max(62, row_widget.sizeHint().height())))
+                self.peer_list_widget.addItem(item)
+                self.peer_list_widget.setItemWidget(item, row_widget)
+                item.setSelected(is_active)
+                added_count += 1
+
+            if added_count == 0:
+                if self._search_filter_text:
+                    self._add_empty_sidebar_item("No matching conversations.")
+                else:
+                    self._add_empty_sidebar_item(
+                        "No conversations yet.\nSwitch to Online Users to start chatting."
+                    )
+        else:
+            for index, peer in strict_online:
+                if self._search_filter_text:
+                    haystack = f"{index} {peer.name} {peer.ip}:{peer.tcp_port} {peer.status}".lower()
+                    if self._search_filter_text not in haystack:
+                        continue
+
+                is_active = peer.peer_id == self._active_peer_id
+                unread = 0 if is_active else self.shared_state.get_unread_count(peer.peer_id)
+
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, peer.peer_id)
+                item.setToolTip(
+                    f"{peer.name}\n{peer.ip}:{peer.tcp_port}\nStatus: {peer.status}"
+                    + (f"\nUnread: {unread}" if unread else "")
+                )
+                row_widget = PeerItemWidget(index, peer, unread, is_active, mode="online")
+                item.setSizeHint(QSize(0, max(62, row_widget.sizeHint().height())))
+                self.peer_list_widget.addItem(item)
+                self.peer_list_widget.setItemWidget(item, row_widget)
+                item.setSelected(is_active)
+                added_count += 1
+
+            if added_count == 0 and self._search_filter_text:
+                self._add_empty_sidebar_item("No matching online users.")
+
         self.peer_list_widget.setUpdatesEnabled(True)
         self.peer_list_widget.verticalScrollBar().setValue(scroll_value)
 
-        self.online_count_label.setText(f"ONLINE USERS ({len(peers)})")
-        self._refresh_chat_header(peers)
+        self.all_chats_btn.setText(f"All Chats ({len(chat_entries)})")
+        self.online_users_btn.setText(f"Online Users ({len(strict_online)})")
+        self._refresh_chat_header(all_peers)
 
     @Slot(str)
     def on_system_notification(self, text: str) -> None:
@@ -2386,6 +2698,7 @@ class MainWindow(QMainWindow):
             if isinstance(message, ChatMessage) and id(message) not in self._deleted_for_me_ids:
                 self._add_message_bubble(message, animate=True)
             self._append_html(self._format_message(message))
+            self._schedule_sidebar_refresh()
             return
 
         self.on_peer_list_updated()
@@ -2471,6 +2784,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self._progress_hide_timer.stop()
+        self._sidebar_refresh_timer.stop()
         self.command_parser.shutdown()
         event.accept()
 
@@ -2529,10 +2843,11 @@ class MainWindow(QMainWindow):
 
     def _rebuild_plain_text_mirror(self) -> None:
         """Đồng bộ lại `self.chat_display` khi có tin nhắn bị xóa hoặc thu hồi."""
-        if self._active_peer_id is None:
+        target_id = self._active_peer_id or self._viewing_offline_peer_id
+        if target_id is None:
             return
         self.chat_display.clear()
-        for msg in self.shared_state.chat_histories.get(self._active_peer_id, []):
+        for msg in self.shared_state.chat_histories.get(target_id, []):
             if id(msg) not in self._deleted_for_me_ids:
                 self._append_html(self._format_message(msg))
 
@@ -2561,22 +2876,48 @@ class MainWindow(QMainWindow):
 
     def _apply_active_peer(self, peer: Optional[PeerInfo]) -> None:
         self._active_peer_id = peer.peer_id if peer else None
+        self._viewing_offline_peer_id = None
         if peer is not None:
             self._peer_names[peer.peer_id] = peer.name
+            self._known_peers[peer.peer_id] = peer
         self.leave_btn.setEnabled(peer is not None)
         self.send_file_btn.setEnabled(peer is not None)
+        self.message_input.setPlaceholderText(
+            "Write a message and press Enter... (or /list, /chat, /send, /status, /leave, /help, /quit)"
+        )
         self._refresh_chat_header()
         self._update_window_title()
 
     def _refresh_chat_header(self, peers: Optional[List[PeerInfo]] = None) -> None:
+        if peers is None:
+            peers = self.shared_state.get_online_peers()
+
+        if self._active_peer_id is None and self._viewing_offline_peer_id is not None:
+            pid = self._viewing_offline_peer_id
+            peer = next((p for p in peers if p.peer_id == pid), None)
+            name = self._peer_display_name(pid)
+            self.chat_header_label.setText(f"Chat history with {name}")
+            if peer is None:
+                self.channel_tag_label.setText(f"# {name} (Offline)")
+                self.chat_sub_label.setText(
+                    f'{pid} \u00b7 <span style="color:{OFFLINE_COLOR}">\u25cf</span> Offline (read-only history)'
+                )
+                self.chat_avatar_label.setPixmap(_build_avatar_pixmap(name, size=46, status="offline"))
+            else:
+                self.channel_tag_label.setText(f"# {name}")
+                self.chat_sub_label.setText(
+                    f'{peer.ip}:{peer.tcp_port} \u00b7 <span style="color:{STATUS_COLORS.get(peer.status, OFFLINE_COLOR)}">'
+                    f"\u25cf</span> {peer.status} \u00b7 Click user on sidebar to resume chatting"
+                )
+                self.chat_avatar_label.setPixmap(_build_avatar_pixmap(peer.name, size=46, status=peer.status))
+            return
+
         if self._active_peer_id is None:
             self.chat_header_label.setText("No active chat")
             self.chat_sub_label.setText("Click a user on the left, or type /chat <name|number>")
             self.chat_avatar_label.setPixmap(_build_avatar_pixmap("LAN", size=46, status=None, avatar_index=1))
             self.channel_tag_label.setText("# General")
             return
-        if peers is None:
-            peers = self.shared_state.get_online_peers()
         peer = next((p for p in peers if p.peer_id == self._active_peer_id), None)
         name = self._peer_display_name(self._active_peer_id)
         self.chat_header_label.setText(f"Chatting with {name}")
@@ -2596,6 +2937,8 @@ class MainWindow(QMainWindow):
         title = f"LAN Chat & File Sharing - {my_name} (TCP:{my_port}) - {self.status_combo.currentData() or my_status}"
         if self._active_peer_id is not None:
             title += f" - chatting with {self._peer_display_name(self._active_peer_id)}"
+        elif self._viewing_offline_peer_id is not None:
+            title += f" - history with {self._peer_display_name(self._viewing_offline_peer_id)} (offline)"
         self.setWindowTitle(title)
 
     def _set_combo_status(self, status: str) -> None:
